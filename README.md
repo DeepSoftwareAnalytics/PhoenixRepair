@@ -95,8 +95,8 @@ sweagent run-batch \
     --instances.type swe_bench \
     --instances.subset verified \
     --instances.split test \
-    --instances.slice 0:100 \
     --enable_multi_sampling=True \
     --num_samples=3 \
 ```
+
 
