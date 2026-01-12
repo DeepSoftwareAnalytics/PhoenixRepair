@@ -70,7 +70,7 @@ export DEEPSEEK_API_KEY="your-deepseek-key"
 ### Running PhoenixRepair
 
 #### Phase 1: Multi-Location Sets Sampling
-
+Rename run_batch(locate).py to run_batch.py
 ```bash
 sweagent run-batch \
     --config config/locate.yaml \
@@ -98,5 +98,6 @@ sweagent run-batch \
     --enable_multi_sampling=True \
     --num_samples=3 \
 ```
+
 
 
