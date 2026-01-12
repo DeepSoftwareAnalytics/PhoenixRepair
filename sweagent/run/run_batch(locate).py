@@ -75,24 +75,35 @@ try:
 except ImportError:
     SetStatusDeploymentHook = None
 
-try:
-    from learning.summary_new import update_exp as _learning_update_exp  # type: ignore
-except Exception:
-    _learning_update_exp = None  # type: ignore
-
-SPECIFIC_INSTANCE_IDS = None
+def filter_instances_by_ids(instances: list[BatchInstance], target_ids: set[str]) -> list[BatchInstance]:
+    filtered_instances = []
+    found_ids = set()
+    for instance in instances:
+        instance_id = instance.problem_statement.id
+        original_id = instance_id.split("-sample")[0] if "-sample" in instance_id else instance_id
+        if original_id in target_ids:
+            filtered_instances.append(instance)
+            found_ids.add(original_id)
+    missing_ids = target_ids - found_ids
+    logger = get_logger("run", emoji="🏃")
+    if found_ids:
+        logger.info(f"Found the following specified instance IDs: {sorted(found_ids)}")
+    if missing_ids:
+        logger.warning(f"The following specified instance IDs were not found: {sorted(missing_ids)}")
+    logger.info(f"Number of instances after filtering: {len(filtered_instances)} / {len(instances)}")
+    return filtered_instances
 
 
 def deduplicate_patches(sample_paths: list[Path], output_file: Path, logger, min_ratio: float = 0.5) -> dict:
     """
-    Deduplicate patches from multiple sample patch files
+    Deduplicate patch files from multiple samples
     Deduplication rules:
     - If file_path is the same and the longest consecutive matching lines >= min_ratio of the shorter code length, consider as duplicate
     Args:
         sample_paths: List of sample directories
         output_file: Output jsonl file path
-        logger: Logger instance
-        min_ratio: Minimum match ratio (default 0.5, i.e., half)
+        logger: Logger
+        min_ratio: Minimum matching ratio (default 0.5, i.e., one-half)
     Returns:
         Deduplication statistics
     """
@@ -114,21 +125,19 @@ def deduplicate_patches(sample_paths: list[Path], output_file: Path, logger, min
         except Exception as e:
             logger.warning(f"Failed to read patch file: {patch_file}, error: {e}")
             continue
-    logger.info(f"Collected {total_count} modifications, starting deduplication (require consecutive match lines >= {min_ratio*100:.0f}% of shorter code length)")
+    logger.info(f"Collected {total_count} modifications, starting deduplication (requires consecutive matching lines >= {min_ratio*100:.0f}% of shorter code length)")
     for i, item in enumerate(all_modifications):
         mod = item['modification']
         source = item['source']
         file_path = mod.get('file_path', 'N/A')
         is_duplicate = False
         matched_with = None
-        match_details = None
         for unique_item in unique_modifications:
             is_similar, details = are_modifications_similar(mod, unique_item['modification'], min_ratio)
             if is_similar:
                 is_duplicate = True
                 duplicate_count += 1
                 matched_with = unique_item['source']
-                match_details = details
                 logger.debug(f"Found duplicate: {source} similar to {matched_with}")
                 logger.debug(f"  File: {file_path}")
                 logger.debug(f"  Code1 lines: {details['lines1_count']}, Code2 lines: {details['lines2_count']}")
@@ -146,26 +155,15 @@ def deduplicate_patches(sample_paths: list[Path], output_file: Path, logger, min
         for item in unique_modifications:
             json_line = json.dumps({"files_to_modify": [item['modification']], "source_sample": item['source']}, ensure_ascii=False)
             f.write(json_line + '\n')
-    logger.info(f"✓ Deduplication completed:")
+    logger.info(f"✓ Deduplication complete:")
     logger.info(f"  - Total processed: {total_count} modifications")
     logger.info(f"  - Unique items: {len(unique_modifications)}")
-    logger.info(f"  - Duplicates: {duplicate_count}")
-    logger.info(f"  - Dedup ratio: {(duplicate_count/total_count*100):.1f}%" if total_count > 0 else "  - Dedup ratio: N/A")
-    logger.info(f"  - Match threshold: {min_ratio*100:.0f}% of shorter code length")
+    logger.info(f"  - Duplicate items: {duplicate_count}")
+    logger.info(f"  - Deduplication rate: {(duplicate_count/total_count*100):.1f}%" if total_count > 0 else "  - Deduplication rate: N/A")
+    logger.info(f"  - Matching threshold: {min_ratio*100:.0f}% of shorter code length")
     return {'total': total_count, 'unique': len(unique_modifications), 'duplicates': duplicate_count, 'dedup_ratio': (duplicate_count/total_count) if total_count > 0 else 0}
 
 def are_modifications_similar(mod1: dict, mod2: dict, min_ratio: float = 0.5) -> tuple[bool, dict]:
-    """
-    Definition of similarity:
-    1. file_path is the same
-    2. After removing spaces from current_code, longest consecutive matching lines >= min(lines1, lines2) length * min_ratio
-    Args:
-        mod1: First modification
-        mod2: Second modification
-        min_ratio: Minimum match ratio (set to 0.5)
-    Returns:
-        (is_similar, details_dict)
-    """
     file_path1 = mod1.get('file_path', '')
     file_path2 = mod2.get('file_path', '')
     if file_path1 != file_path2:
@@ -193,7 +191,7 @@ def find_longest_consecutive_match(code1: str, code2: str) -> tuple[int, int]:
         code1: First code snippet
         code2: Second code snippet
     Returns:
-        (longest consecutive match line count, total lines in code1)
+        (longest consecutive matching lines count, total lines in code1)
     """
     lines1 = get_code_lines(code1)
     lines2 = get_code_lines(code2)
@@ -207,36 +205,16 @@ def find_longest_consecutive_match(code1: str, code2: str) -> tuple[int, int]:
             max_consecutive = match.size
     return max_consecutive, len(lines1)
 
-
 def get_code_lines(code: str) -> list[str]:
     return [line.strip() for line in code.strip().split('\n') if line.strip()]
 
-
-def filter_instances_by_ids(instances: list[BatchInstance], target_ids: set[str]) -> list[BatchInstance]:
-    filtered_instances = []
-    found_ids = set()
-    for instance in instances:
-        instance_id = instance.problem_statement.id
-        original_id = instance_id.split("-sample")[0] if "-sample" in instance_id else instance_id
-        if original_id in target_ids:
-            filtered_instances.append(instance)
-            found_ids.add(original_id)
-    missing_ids = target_ids - found_ids
-    logger = get_logger("run", emoji="🏃")
-    if found_ids:
-        logger.info(f"Found specified instance IDs: {sorted(found_ids)}")
-    if missing_ids:
-        logger.warning(f"Missing specified instance IDs: {sorted(missing_ids)}")
-    logger.info(f"Filtered instance count: {len(filtered_instances)} / {len(instances)}")
-    return filtered_instances
-
 class LocationInsightsComparator:
     _thread_local = threading.local()
-    def __init__(self, api_key: str = None, base_url: str = "https://api.deepseek.com/v1", model_name: str = "deepseek-chat"):
+    def __init__(self, api_key: str = None, base_url: str = "", model_name: str = ""):
+        self.logger = get_logger("location-comparator", emoji="🔍")
         self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
         self.base_url = base_url
         self.model_name = model_name
-        self.logger = get_logger("location-comparator", emoji="🔍")
         self.max_retries = 5
         self.retry_delay = 2
     
@@ -264,12 +242,12 @@ class LocationInsightsComparator:
                     raise ValueError(f"Unexpected API response format: {result.keys()}")
                 return answer
             except (ValueError, AttributeError, IndexError, requests.RequestException) as e:
-                self.logger.warning(f"API call failed, retry {retries + 1}/{self.max_retries} (error: {str(e)})")
+                self.logger.warning(f"API call failed, retrying {retries + 1}/{self.max_retries} (error: {str(e)})")
                 retries += 1
                 if retries < self.max_retries:
                     time.sleep(self.retry_delay)
             except Exception as e:
-                self.logger.error(f"API call encountered unknown error: {e}")
+                self.logger.error(f"Unknown error occurred during API call: {e}")
                 break
         return ""
         
@@ -362,135 +340,14 @@ class MultiSampleComparator:
                     raise ValueError(f"Unexpected API response format: {result.keys()}")
                 return answer
             except (ValueError, AttributeError, IndexError, requests.RequestException) as e:
-                self.logger.warning(f"API call failed, retry {retries + 1}/{self.max_retries} (error: {str(e)})")
+                self.logger.warning(f"API call failed, retrying {retries + 1}/{self.max_retries} (error: {str(e)})")
                 retries += 1
                 if retries < self.max_retries:
                     time.sleep(self.retry_delay)
             except Exception as e:
-                self.logger.error(f"API call encountered unknown error: {e}")
+                self.logger.error(f"Unknown error occurred during API call: {e}")
                 break
         return ""
-    
-    def compare_samples(self, sample_paths: list[Path], problem_statement: str, num_samples: int) -> dict:
-        """Compare multiple sampling results and return the best sample"""
-        self.logger.info(f"Starting comparison of {len(sample_paths)} sampling results")
-        samples_data = []
-        for i, sample_path in enumerate(sample_paths, 1):
-            traj_file = sample_path / f"{sample_path.name}.traj"
-            if not traj_file.exists():
-                self.logger.warning(f"Sample {i} trajectory does not exist: {traj_file}")
-                samples_data.append(None)
-                continue
-            try:
-                data = json.loads(traj_file.read_text())
-                samples_data.append({
-                    'index': i,
-                    'path': sample_path,
-                    'trajectory': data.get('trajectory', []),
-                    'info': data.get('info', {}),
-                    'submission': data.get('info', {}).get('submission', ''),
-                    'exit_status': data.get('info', {}).get('exit_status', 'unknown')
-                })
-                self.logger.info(f"Successfully read Sample {i}: {len(data.get('trajectory', []))} steps, exit: {data.get('info', {}).get('exit_status', 'unknown')}")
-            except Exception as e:
-                self.logger.error(f"Failed to read Sample {i}: {e}")
-                samples_data.append(None)
-        valid_samples = [s for s in samples_data if s is not None]
-        if not valid_samples:
-            self.logger.error("No valid sampling data")
-            return {'best_sample_index': 1, 'insights': 'No valid sampling data', 'comparison_failed': True, 'total_samples': len(sample_paths), 'valid_samples': 0}
-        comparison_prompt = self._build_comparison_prompt(problem_statement, valid_samples, num_samples)
-        messages = [{"role": "user", "content": comparison_prompt}]
-        insights = ""
-        for attempt in range(self.max_retries):
-            insights = self._call_api(messages)
-            self.logger.info(f"insights:\n{insights}")
-            if insights.strip():
-                self.logger.info(f"Attempt {attempt + 1} successfully obtained comparison result")
-                break
-            self.logger.warning(f"Attempt {attempt + 1} did not obtain valid result")
-            time.sleep(1)
-        if not insights.strip():
-            self.logger.error("Failed to obtain valid comparison result, using default strategy")
-            for sample in valid_samples:
-                if sample['submission']:
-                    return {'best_sample_index': sample['index'], 'insights': 'Comparison analysis failed, selected first sample with submission', 'comparison_failed': True, 'total_samples': len(sample_paths), 'valid_samples': len(valid_samples)}
-            return {'best_sample_index': valid_samples[0]['index'], 'insights': 'Comparison analysis failed, selected first sample', 'comparison_failed': True, 'total_samples': len(sample_paths), 'valid_samples': len(valid_samples)}
-        best_index = self._extract_best_sample_index(insights, valid_samples)
-        return {'best_sample_index': best_index, 'insights': insights, 'comparison_failed': False, 'total_samples': len(sample_paths), 'valid_samples': len(valid_samples)}
-    
-    def _build_comparison_prompt(self, problem_statement: str, samples: list[dict], num_samples: int) -> str:
-        """Build prompt for comparison analysis"""
-        prompt = f"""You are an expert code debugging analyst. Compare multiple solution attempts for the same SWE-bench task and identify the best approach.
-
-## Problem Statement
-{problem_statement}
-
-## Solution Attempts
-
-"""
-        for sample in samples:
-            prompt += f"""### Sample {sample['index']}
-**Execution Summary:** {len(sample['trajectory'])} steps, Exit: {sample['exit_status']}, Patch: {'Yes' if sample['submission'] else 'No'}
-
-**Trajectory Summary:**
-"""
-            traj = sample['trajectory']
-            for i, step in enumerate(traj, 1):
-                prompt += f"Step {i}: {step.get('thought', 'N/A')[:200]}... -> {step.get('action', 'N/A')[:200]}...\n"
-            
-            if sample['submission']:
-                prompt += f"\n**Patch:**\n```\n{sample['submission'][:1000]}{'...' if len(sample['submission']) > 1000 else ''}\n```\n\n"
-            else:
-                prompt += "\n**Patch:** No submission\n\n"
-        
-        prompt += f"""## Analysis Requirements
-
-Compare all samples and provide:
-
-1. **Best Sample Selection:** Which sample number (1-{num_samples}) has the most correct solution?
-
-2. **Reasoning:** Why is this sample better than others? Consider:
-   - Patch correctness and completeness
-   - Problem understanding accuracy
-   - Debugging approach effectiveness
-   - Edge case handling
-
-3. **Key Insights for Next Attempt:** What can we learn from all attempts to guide the next solution? Be specific about:
-   - Which approaches worked well
-   - Common mistakes to avoid
-   - Specific files/functions that need attention
-   - Testing strategies that should be used
-
-## Output Format
-
-**BEST_SAMPLE:** [number]
-
-**REASONING:**
-[Detailed comparison explaining why this sample is best]
-
-**INSIGHTS FOR NEXT ATTEMPT:**
-[Specific, actionable guidance for the {num_samples + 1}th attempt based on learnings from all {num_samples} samples]
-
-Keep response under 800 words. Focus on concrete technical differences and actionable insights.
-"""
-        return prompt
-    
-    def _extract_best_sample_index(self, insights: str, valid_samples: list[dict]) -> int:
-        """Extract best sample index from insights"""
-        import re
-        match = re.search(r'BEST_SAMPLE:\s*(\d+)', insights, re.IGNORECASE)
-        if match:
-            idx = int(match.group(1))
-            if any(s['index'] == idx for s in valid_samples):
-                self.logger.info(f"Extracted best sample from analysis result: Sample {idx}")
-                return idx
-        self.logger.warning("Failed to extract best sample from analysis result, using default strategy")
-        for sample in valid_samples:
-            if sample['submission']:
-                return sample['index']
-        return valid_samples[0]['index']
-
 
 class RunBatchConfig(BaseSettings, cli_implicit_flags=False):
     instances: BatchInstanceSourceConfig = Field(description="Instances to run.")
@@ -503,15 +360,21 @@ class RunBatchConfig(BaseSettings, cli_implicit_flags=False):
     num_workers: int = Field(default=1)
     random_delay_multiplier: float = 0.3
     progress_bar: bool = True
-    
     enable_multi_sampling: bool = False
     num_samples: int = 5
     enable_best_sample_selection: bool = False
-    comparison_api_key: str = ""
-    comparison_api_base: str = ""
-    comparison_model_name: str = "deepseek-chat"
     model_config = SettingsConfigDict(extra="forbid", env_prefix="SWE_AGENT_")
-    
+    comparison_api_key: str = Field(default="", description="API key for comparison model")
+    comparison_api_base: str = Field(default="", description="API base URL for comparison model")
+    comparison_model_name: str = Field(
+        default="",
+        description="Model name for comparison"
+    )
+    specific_instance_ids: str | None = Field(
+        default=None,
+        description="Comma-separated list of specific instance IDs to run (e.g., 'django__django-12193,sympy__sympy-14248')"
+    )
+
     def set_default_output_dir(self) -> None:
         if self.output_dir == Path("DEFAULT"):
             user_id = getpass.getuser()
@@ -539,13 +402,13 @@ class RunBatchConfig(BaseSettings, cli_implicit_flags=False):
 class _BreakLoop(Exception):
     """Used for internal control flow"""
 
+
 class RunBatch:
     def __init__(self, instances: list[BatchInstance], agent_config: AgentConfig, *, 
                  output_dir: Path = Path("."), hooks: list[RunHook] | None = None, 
                  raise_exceptions: bool = False, redo_existing: bool = False, 
                  num_workers: int = 1, progress_bar: bool = True, 
                  random_delay_multiplier: float = 0.3):
-        
         if self._model_id in ["human", "human_thought"] and num_workers > 1:
             msg = "Cannot run with human model in parallel"
             raise ValueError(msg)
@@ -563,11 +426,10 @@ class RunBatch:
         self._progress_manager = RunBatchProgressManager(num_instances=len(instances), yaml_report_path=output_dir / "run_batch_exit_statuses.yaml")
         self._show_progress_bar = progress_bar
         self._random_delay_multiplier = random_delay_multiplier
-        
         self.enable_multi_sampling = False
         self.num_samples = 5
-        self.enable_best_sample_selection = False
         self._comparator_config = None
+
 
     @property
     def _model_id(self) -> str:
@@ -586,30 +448,26 @@ class RunBatch:
         logger.debug("Loading instances from %s", f"{config.instances!r}")
         instances = config.instances.get_instance_configs()
         logger.info("Loaded %d instances", len(instances))
-        
-        if SPECIFIC_INSTANCE_IDS:
-            instances = filter_instances_by_ids(instances, SPECIFIC_INSTANCE_IDS)
+        if config.specific_instance_ids:
+            specific_ids = {id.strip() for id in config.specific_instance_ids.split(',') if id.strip()}
+            logger.info(f"Filtering to specific instance IDs: {sorted(specific_ids)}")
+            instances = filter_instances_by_ids(instances, specific_ids)
             if not instances:
-                msg = f"No instances found after filtering. Please check specified instance IDs: {sorted(SPECIFIC_INSTANCE_IDS)}"
+                msg = f"No instances found after filtering. Please check the specified instance IDs: {sorted(specific_ids)}"
                 raise ValueError(msg)
-        
-        if not config.enable_multi_sampling:
-            pass
-        else:
-            logger.info(f"Multi-sampling mode: Will execute {config.num_samples} samples for each of {len(instances)} tasks")
-            if config.num_workers > 1:
-                logger.info(f"Task-level parallelism: {config.num_workers} tasks run in parallel, samples within each task run sequentially")
+            if not config.enable_multi_sampling:
+                pass
             else:
-                logger.info(f"Fully sequential mode: Both tasks and samples run sequentially")
-
+                logger.info(f"Multi-sampling mode: will execute {config.num_samples} samples for each of {len(instances)} tasks")
+                if config.num_workers > 1:
+                    logger.info(f"Task-level parallelism: {config.num_workers} tasks in parallel, each task's samples executed sequentially")
+                else:
+                    logger.info(f"Fully sequential mode: both tasks and samples executed sequentially")
         if not instances:
             msg = "No instances to run."
             raise ValueError(msg)
-
         logger.debug("The first instance is %s", f"{instances[0]!r}")
-        
         actual_num_workers = config.num_workers if config.enable_multi_sampling else 1
-        
         rb = cls(
             instances=instances,
             agent_config=config.agent,
@@ -620,12 +478,9 @@ class RunBatch:
             progress_bar=config.progress_bar,
             random_delay_multiplier=config.random_delay_multiplier
         )
-        
         rb.enable_multi_sampling = config.enable_multi_sampling
         rb.num_samples = config.num_samples
-        rb.enable_best_sample_selection = config.enable_best_sample_selection
         rb._comparator_config = {'api_key': config.comparison_api_key, 'base_url': config.comparison_api_base, 'model_name': config.comparison_model_name}
-
         if isinstance(config.instances, SWEBenchInstances) and config.instances.evaluate:
             from sweagent.run.hooks.swe_bench_evaluate import SweBenchEvaluate
             rb.add_hook(SweBenchEvaluate(output_dir=config.output_dir, subset=config.instances.subset, split=config.instances.split, continuous_submission_every=1))
@@ -636,7 +491,7 @@ class RunBatch:
         self._chooks.add_hook(hook)
 
     def main_sequential_sampling(self) -> None:
-        """Fully sequential mode: All tasks run serially, samples within each task also run sequentially"""
+        """Fully sequential mode: all tasks executed serially, samples within each task also executed sequentially"""
         original_ids = set()
         original_instances_map = {}
         for inst in self.instances:
@@ -644,7 +499,7 @@ class RunBatch:
                 original_id = inst.problem_statement.id
                 original_ids.add(original_id)
                 original_instances_map[original_id] = inst
-        self.logger.info(f"Fully sequential mode: Execute {self.num_samples} samples for each of {len(original_ids)} tasks")
+        self.logger.info(f"Fully sequential mode: executing {self.num_samples} samples for each of {len(original_ids)} tasks")
         for original_id in sorted(original_ids):
             try:
                 template_instance = original_instances_map[original_id]
@@ -658,7 +513,7 @@ class RunBatch:
                     raise
 
     def main_parallel_tasks_with_sequential_samples(self) -> None:
-        """Parallel task mode: Multiple tasks run in parallel, but samples within each task run sequentially"""
+        """Parallel tasks mode: multiple tasks executed in parallel, but samples within each task executed sequentially"""
         original_ids = set()
         original_instances_map = {}
         for inst in self.instances:
@@ -666,8 +521,7 @@ class RunBatch:
                 original_id = inst.problem_statement.id
                 original_ids.add(original_id)
                 original_instances_map[original_id] = inst
-        
-        self.logger.info(f"Parallel task mode: {len(original_ids)} tasks run in parallel ({self._num_workers} threads), {self.num_samples} samples within each task run sequentially")
+        self.logger.info(f"Parallel tasks mode: {len(original_ids)} tasks in parallel ({self._num_workers} threads), {self.num_samples} samples per task executed sequentially")
         add_logger_names_to_stream_handlers()
         set_stream_handler_levels(logging.WARNING)
         self.logger.setLevel(logging.TRACE)
@@ -695,18 +549,14 @@ class RunBatch:
                     self._progress_manager.print_report()
 
     def _run_single_task_sequential_samples(self, original_id: str, template_instance: BatchInstance) -> None:
-        """Execute all samples for a single task, with checkpoint resume support"""
+        """Execute all samples for a single task, with checkpoint recovery support"""
         self.logger.info(f"\n{'=' * 80}")
         self.logger.info(f"Starting task: {original_id}")
         self.logger.info(f"{'=' * 80}\n")
-        
-        # Check if sample5 is already completed
         sample5_patch = self.output_dir / f"{original_id}-sample5" / f"{original_id}-sample5.patch"
         if sample5_patch.exists():
-            self.logger.info(f"✅ Task {original_id} already has sample5 .patch file, skipping entire task")
+            self.logger.info(f"✅ Task {original_id}'s sample5 already has .patch file, skipping entire task")
             return
-        
-        # Find the first sample without .patch file
         start_sample_idx = 1
         for i in range(1, self.num_samples + 1):
             sample_id = f"{original_id}-sample{i}"
@@ -718,47 +568,32 @@ class RunBatch:
         else:
             self.logger.info(f"✅ All samples for task {original_id} already have .patch files")
             return
-        
-        # From start_sample_idx, only execute samples without .patch
         for sample_idx in range(start_sample_idx, self.num_samples + 1):
             sample_id = f"{original_id}-sample{sample_idx}"
             patch_file = self.output_dir / sample_id / f"{sample_id}.patch"
-            
-            # Check if current sample already has .patch
             if patch_file.exists():
                 self.logger.info(f"⏭️ Skipping Sample {sample_idx}/{self.num_samples}: {sample_id} (already has .patch)")
                 continue
-            
             self.logger.info(f"▶️ Executing Sample {sample_idx}/{self.num_samples}: {sample_id}")
-            
-            # Check trajectory completeness (optional, for additional validation)
             is_complete, status = self._check_trajectory_complete(sample_id)
             if is_complete and not self._redo_existing:
                 self.logger.info(f"⏭️ Skipping completed sample: {sample_id} (status: {status})")
                 continue
-            
             sample_instance = copy.deepcopy(template_instance)
             sample_instance.problem_statement.id = sample_id
-            
-            # Generate reflection (learn from previous sample)
             if sample_idx > 1:
-                # Find the most recent valid previous sample
                 prev_sample_idx = sample_idx - 1
                 prev_sample_id = f"{original_id}-sample{prev_sample_idx}"
                 reflection = self._generate_reflection(original_id, prev_sample_id, sample_idx)
                 if reflection:
-                    enhanced_config = self._enhance_config_with_reflection(
-                        self.agent_config, reflection, sample_idx, sample_id
-                    )
+                    enhanced_config = self._enhance_config_with_reflection(self.agent_config, reflection, sample_idx, sample_id)
                     self.logger.info(f"Added reflection from sample{prev_sample_idx}")
                 else:
                     enhanced_config = self.agent_config
-                    self.logger.warning(f"Failed to get reflection from sample{prev_sample_idx}, using original config")
+                    self.logger.warning(f"Could not get reflection from sample{prev_sample_idx}, using original config")
             else:
                 enhanced_config = self.agent_config
-                self.logger.info(f"Sample 1: Using original config (no prior reflection)")
-            
-            # Execute current sample
+                self.logger.info(f"Sample 1: using original config (no prior reflection)")
             try:
                 self._run_single_sample(sample_instance, enhanced_config)
                 self.logger.info(f"✅ Sample {sample_idx} execution completed")
@@ -770,16 +605,13 @@ class RunBatch:
                 if self._raise_exceptions:
                     raise
                 continue
-        
-        # Post-processing: Generate location insights and deduplication
         self.logger.info(f"\n{'='*80}")
-        self.logger.info(f"Starting to generate location insights for {original_id}")
+        self.logger.info(f"Starting generation of location insights for {original_id}")
         try:
             self._generate_location_insights(original_id, template_instance)
         except Exception as e:
             self.logger.error(f"Failed to generate location insights: {e}")
             self.logger.error(traceback.format_exc())
-        
         self.logger.info(f"\n{'='*80}")
         self.logger.info(f"Starting deduplication for all samples of {original_id}")
         try:
@@ -788,29 +620,27 @@ class RunBatch:
                 sample_path = self.output_dir / f"{original_id}-sample{i}"
                 if sample_path.exists():
                     sample_paths.append(sample_path)
-            
             last_sample_dir = self.output_dir / f"{original_id}-sample{self.num_samples}"
             last_sample_dir.mkdir(parents=True, exist_ok=True)
             deduplicated_file = last_sample_dir / "deduplicated_patches_new.jsonl"
             stats = deduplicate_patches(sample_paths, deduplicated_file, self.logger)
-            self.logger.info(f"✓ Deduplication completed:")
+            self.logger.info(f"✓ Deduplication complete:")
             self.logger.info(f"  - Total processed: {stats['total']} modifications")
             self.logger.info(f"  - Unique items: {stats['unique']}")
-            self.logger.info(f"  - Duplicates: {stats['duplicates']}")
+            self.logger.info(f"  - Duplicate items: {stats['duplicates']}")
             self.logger.info(f"  - Results saved to: {deduplicated_file}")
         except Exception as e:
             self.logger.error(f"Deduplication failed: {e}")
             self.logger.error(traceback.format_exc())
-        
         self.logger.info(f"\n✅ All samples for task {original_id} completed\n")
 
     def _generate_reflection(self, original_id: str, prev_sample_id: str, current_sample_idx: int) -> str:
-        """Generate reflection information from previous sampling"""
+        """Generate reflection from previous sample"""
         prev_sample_dir = self.output_dir / prev_sample_id
         traj_file = prev_sample_dir / f"{prev_sample_id}.traj"
         patch_file = prev_sample_dir / f"{prev_sample_id}.patch"
         if not traj_file.exists():
-            self.logger.warning(f"Previous sample trajectory file does not exist: {traj_file}")
+            self.logger.warning(f"Previous sample's trajectory file does not exist: {traj_file}")
             return ""
         try:
             traj_data = json.loads(traj_file.read_text())
@@ -874,13 +704,12 @@ class RunBatch:
 Be creative, thorough, and willing to challenge previous conclusions.
 """
             return reflection
-            
         except Exception as e:
             self.logger.error(f"Failed to generate reflection: {e}")
             return ""
 
     def _enhance_config_with_reflection(self, original_config: AgentConfig, reflection: str, sample_idx: int, instance_id: str) -> AgentConfig:
-        """Enhance agent config with reflection information"""
+        """Enhance agent config with reflection"""
         enhanced_config = original_config.model_copy(deep=True)
         original_template = enhanced_config.templates.instance_template
         enhanced_template = f"""# Iterative Root Cause Analysis - Attempt {sample_idx}
@@ -894,7 +723,7 @@ Be creative, thorough, and willing to challenge previous conclusions.
 {original_template}
 """
         enhanced_config.templates.instance_template = enhanced_template
-        self.logger.info(f"Added reflection information for Sample {sample_idx} (length: {len(reflection)} characters)")
+        self.logger.info(f"Added reflection for Sample {sample_idx} (length: {len(reflection)} chars)")
         instance_output_dir = self.output_dir / instance_id
         instance_output_dir.mkdir(parents=True, exist_ok=True)
         enhanced_template_file = instance_output_dir / "enhanced_template.txt"
@@ -957,7 +786,7 @@ Be creative, thorough, and willing to challenge previous conclusions.
             return False, "check_error"
 
     def should_skip_instance(self, instance: BatchInstance) -> tuple[bool, str]:
-        # If redo_existing is set, do not skip
+        # If redo_existing is set, don't skip
         if self._redo_existing:
             return False, ""
         instance_id = instance.problem_statement.id
@@ -971,10 +800,10 @@ Be creative, thorough, and willing to challenge previous conclusions.
         self._chooks.on_start()
         if self.enable_multi_sampling:
             if self._num_workers <= 1:
-                self.logger.info("=== Single-thread mode: All tasks run serially, samples run sequentially ===")
+                self.logger.info("Single-threaded mode: all tasks executed serially, samples executed sequentially")
                 self.main_sequential_sampling()
             else:
-                self.logger.info(f"=== Multi-thread mode: {self._num_workers} tasks run in parallel, samples within each task run sequentially ===")
+                self.logger.info(f"Multi-threaded mode: {self._num_workers} tasks in parallel, samples within each task executed sequentially")
                 self.main_parallel_tasks_with_sequential_samples()
         elif self._num_workers <= 1:
             self.main_single_worker()
@@ -998,62 +827,14 @@ Be creative, thorough, and willing to challenge previous conclusions.
                 skipped_count += 1
             else:
                 instances_to_run.append(inst)
-        self.logger.info(f"Sampling phase: Skipped {skipped_count} completed instances, executing {len(instances_to_run)} new instances")
+        self.logger.info(f"Sampling phase: skipped {skipped_count} completed instances, executing {len(instances_to_run)} new instances")
         if not instances_to_run:
-            self.logger.info("Sampling phase: All instances completed, no execution needed")
+            self.logger.info("Sampling phase: all instances completed, no execution needed")
             return
         if self._num_workers <= 1:
             self._run_instances_sequential(instances_to_run)
         else:
             self._run_instances_parallel(instances_to_run)
-    
-    def main_best_selection_phase(self) -> None:
-        original_ids = set()
-        for inst in self.instances:
-            if '-sample' in inst.problem_statement.id:
-                original_id = inst.problem_statement.id.split('-sample')[0]
-                original_ids.add(original_id)
-        final_sample_num = self.num_samples + 1
-        self.logger.info(f"Best selection phase: Checking sample{final_sample_num} status for {len(original_ids)} tasks")
-        final_sample_instances = []
-        skipped_count = 0
-        for original_id in sorted(original_ids):
-            final_sample_id = f"{original_id}-sample{final_sample_num}"
-            is_complete, status = self._check_trajectory_complete(final_sample_id)
-            if is_complete and not self._redo_existing:
-                self.logger.info(f"⏭️ Skipping completed sample{final_sample_num}: {final_sample_id} (status: {status})")
-                skipped_count += 1
-                continue
-            template_instance = None
-            for inst in self.instances:
-                if inst.problem_statement.id.startswith(original_id + '-sample'):
-                    template_instance = inst
-                    break
-            if template_instance is None:
-                self.logger.warning(f"Template instance not found for {original_id}, skipping sample{final_sample_num} creation")
-                continue
-            final_sample_instance = copy.deepcopy(template_instance)
-            final_sample_instance.problem_statement.id = final_sample_id
-            final_sample_instances.append(final_sample_instance)
-        self.logger.info(f"Best selection phase: Skipped {skipped_count} completed sample{final_sample_num}, executing {len(final_sample_instances)} new sample{final_sample_num}")
-        if not final_sample_instances:
-            self.logger.info(f"Best selection phase: All sample{final_sample_num} completed, no execution needed")
-            return
-        if self._num_workers <= 1:
-            for instance in final_sample_instances:
-                self.run_instance_with_comparison(instance)
-        else:
-            with Live(self._progress_manager.render_group):
-                with ThreadPoolExecutor(max_workers=self._num_workers) as executor:
-                    futures = [executor.submit(self.run_instance_with_comparison, instance) for instance in final_sample_instances]
-                    try:
-                        for future in as_completed(futures):
-                            future.result()
-                    except (KeyboardInterrupt, _BreakLoop):
-                        self.logger.info("Received interrupt signal, waiting for running instances to complete")
-                        executor.shutdown(wait=False, cancel_futures=True)
-                    finally:
-                        self._progress_manager.print_report()
 
     def main_single_worker(self) -> None:
         with ExitStack() as stack:
@@ -1143,72 +924,6 @@ Be creative, thorough, and willing to challenge previous conclusions.
         finally:
             self._progress_manager.update_exit_status_table()
             self._remove_instance_log_file_handlers(instance_id)
-    
-    def run_instance_with_comparison(self, instance: BatchInstance) -> None:
-        """Run sample{num_samples+1} instance (with comparison analysis of previous num_samples samples)"""
-        final_sample_num = self.num_samples + 1
-        final_sample_id = instance.problem_statement.id
-        original_id = final_sample_id.replace(f'-sample{final_sample_num}', '')
-        should_skip, skip_reason = self.should_skip_instance(instance)
-        if should_skip:
-            self.logger.info(f"⏭️ Skipping {final_sample_id}: {skip_reason}")
-            self._progress_manager.on_instance_start(final_sample_id)
-            self._progress_manager.on_instance_end(final_sample_id, exit_status=skip_reason)
-            return
-        self.logger.info(f"Starting sample{final_sample_num} for {original_id} (based on best selection from previous {self.num_samples} samples)")
-        register_thread_name(final_sample_id)
-        self._add_instance_log_file_handlers(final_sample_id, multi_worker=self._num_workers > 1)
-        if self._progress_manager.n_completed < self._num_workers:
-            time.sleep(random.random() * self._random_delay_multiplier * (self._num_workers - 1))
-        self._progress_manager.on_instance_start(final_sample_id)
-        try:
-            sample_paths = []
-            for i in range(1, self.num_samples + 1):
-                sample_path = self.output_dir / f"{original_id}-sample{i}"
-                sample_paths.append(sample_path)
-            comparison_insights_path = self.output_dir / final_sample_id / "comparison_insights.txt"
-            comparison_insights_path.parent.mkdir(parents=True, exist_ok=True)
-            if not comparison_insights_path.exists() or comparison_insights_path.stat().st_size == 0:
-                self.logger.info(f"Starting comparison of previous {self.num_samples} sampling results: {original_id}")
-                problem_statement_text = instance.problem_statement.get_problem_statement()
-                comparator = MultiSampleComparator.get_thread_local_instance(api_key=self._comparator_config['api_key'], base_url=self._comparator_config['base_url'], model_name=self._comparator_config['model_name'])
-                comparison_result = comparator.compare_samples(sample_paths, problem_statement_text, self.num_samples)
-                with open(comparison_insights_path, 'w', encoding='utf-8') as f:
-                    f.write(f"Best Sample: {comparison_result['best_sample_index']}\n\n")
-                    f.write(f"Total Samples: {comparison_result['total_samples']}\n")
-                    f.write(f"Valid Samples: {comparison_result['valid_samples']}\n")
-                    f.write(f"Comparison Failed: {comparison_result['comparison_failed']}\n\n")
-                    f.write("=" * 80 + "\n")
-                    f.write("INSIGHTS:\n")
-                    f.write("=" * 80 + "\n")
-                    f.write(comparison_result['insights'])
-                insights = comparison_result['insights']
-                best_sample_idx = comparison_result['best_sample_index']
-                self.logger.info(f"Best sample: Sample {best_sample_idx}")
-            else:
-                with open(comparison_insights_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                insights = content.split("=" * 80 + "\nINSIGHTS:\n" + "=" * 80 + "\n")[1] if "INSIGHTS:" in content else content
-                self.logger.info(f"Using existing comparison result: {comparison_insights_path}")
-            enhanced_agent_config = self._enhance_agent_config_with_insights(self.agent_config, insights, self.num_samples)
-            result = self._run_single_instance_with_config(instance, enhanced_agent_config)
-            self._progress_manager.on_instance_end(final_sample_id, exit_status=result.info.get("exit_status", "unknown_exit"))
-        except KeyboardInterrupt:
-            raise _BreakLoop
-        except (SystemExit, ModelConfigurationError, TotalCostLimitExceededError) as e:
-            if self._raise_exceptions:
-                raise
-            self.logger.critical(f"❌ Exiting because {e.__class__.__name__} was called")
-            raise _BreakLoop
-        except Exception as e:
-            self.logger.error(traceback.format_exc())
-            self.logger.error(f"❌ Failed on {final_sample_id}: {e}")
-            self._progress_manager.on_uncaught_exception(final_sample_id, e)
-            if self._raise_exceptions:
-                raise
-        finally:
-            self._progress_manager.update_exit_status_table()
-            self._remove_instance_log_file_handlers(final_sample_id)
 
     def _run_instance(self, instance: BatchInstance) -> AgentRunResult:
         """Standard instance execution"""
