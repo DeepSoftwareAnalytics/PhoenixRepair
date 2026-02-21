@@ -80,6 +80,7 @@ sweagent run-locate \
     --instances.subset verified \
     --instances.split test \
     --enable_multi_sampling=True \
+    --specific_instance_ids="" \  # Specify the instance IDs to be executed
     --num_samples=5 \   # The Number of sequential samples per task
     --num_workers=25 \  # The number of tasks executed in parallel
     --enable_best_sample_selection=False \
@@ -100,12 +101,14 @@ sweagent run-batch \
     --instances.subset verified \
     --instances.split test \
     --enable_multi_sampling=True \
+    --specific_instance_ids="" \  # Specify the instance IDs to be executed
     --num_samples=3 \
     --comparison_model_name="" \  # Please enter the model name, for example "deepseek-chat"
     --comparison_api_key="" \   # Please enter the api_key
     --comparison_api_base="" \  # Please enter the url, for example "https://api.deepseek.com/v1"
     --deduplicated_patches_root ""  # Please enter the absolute path obtained in Phase 1， for example "/home/PhoenixPepair/trajectories/root/locate__openai--GLM-4.7__t-0.70__p-1.00__c-0.00___swe_bench_verified_test"
 ```
+
 
 
 
