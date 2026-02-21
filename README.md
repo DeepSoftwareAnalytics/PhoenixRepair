@@ -121,9 +121,11 @@ sweagent run-batch \
 #### Phase 3: Evaluation
 ```bash
 git clone https://github.com/SWE-bench/SWE-bench.git
+python tackle_pred.py
 python evaluation/run_evaluation.py \
-    --results_dir "" \  # The absolute path obtained in Phase 2, for example "/home/PhoenixPepair/trajectories/root/default__openai--GLM-4.7__t-0.70__p-1.00__c-0.00___swe_bench_verified_test"
+    --results_dir "" \  # Please Enter The absolute path obtained in Phase 2, for example "/home/PhoenixPepair/trajectories/root/default__openai--GLM-4.7__t-0.70__p-1.00__c-0.00___swe_bench_verified_test"
 ```
+
 
 
 
