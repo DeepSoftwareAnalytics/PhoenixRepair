@@ -1,4 +1,4 @@
-# PhoenixRepair: Rising from Multi-Location Sampling and Iterative Self-Reflection
+# 🐦‍🔥 PhoenixRepair: Rising from Multi-Location Sampling and Iterative Self-Reflection
 
 > **PhoenixRepair** is a multi-agent framework that systematically explores multiple candidate location sets and performs iterative reflection and refinement on patch generation, thereby expanding the search space of repair strategies for automated issue resolution.
 
@@ -106,6 +106,7 @@ sweagent run-batch \
     --comparison_api_base="" \  # Please enter the url, for example "https://api.deepseek.com/v1"
     --deduplicated_patches_root ""  # Please enter the absolute path obtained in Phase 1， for example "/home/PhoenixPepair/trajectories/root/locate__openai--GLM-4.7__t-0.70__p-1.00__c-0.00___swe_bench_verified_test"
 ```
+
 
 
 
