@@ -70,34 +70,43 @@ export DEEPSEEK_API_KEY="your-deepseek-key"
 ### Running PhoenixRepair
 
 #### Phase 1: Multi-Location Sets Sampling
-Rename run_batch(locate).py to run_batch.py
 ```bash
-sweagent run-batch \
+sweagent run-locate \
     --config config/locate.yaml \
-    --agent.model.name "" \
-    --agent.model.api_base "" \
-    --agent.model.per_instance_cost_limit 2.30 \
+    --agent.model.name "" \  # Please enter the model name, for example "deepseek-chat"
+    --agent.model.api_base "" \  # Please enter the url, for example "https://api.deepseek.com/v1"
+    --agent.model.per_instance_cost_limit 3.00 \
     --instances.type swe_bench \
     --instances.subset verified \
     --instances.split test \
     --enable_multi_sampling=True \
-    --num_samples=5 \
+    --num_samples=5 \   # The Number of sequential samples per task
+    --num_workers=25 \  # The number of tasks executed in parallel
+    --enable_best_sample_selection=False \
+    --comparison_model_name="" \  # Please enter the model name, for example "deepseek-chat"
+    --comparison_api_key="" \  # Please enter the api_key
+    --comparison_api_base="" \  # Please enter the url, for example "https://api.deepseek.com/v1"
 ```
 
 #### Phase 2: Iterative Reflection & Refinement
 
 ```bash
 sweagent run-batch \
-    --config config/default.yaml \
-    --agent.model.name "" \
-    --agent.model.api_base "" \
-    --agent.model.per_instance_cost_limit 2.30 \
+    --config config/default.yaml \ 
+    --agent.model.name "" \   # Please enter the model name, for example "deepseek-chat"
+    --agent.model.api_base "" \  # Please enter the url, for example "https://api.deepseek.com/v1"
+    --agent.model.per_instance_cost_limit 3.00 \
     --instances.type swe_bench \
     --instances.subset verified \
     --instances.split test \
     --enable_multi_sampling=True \
     --num_samples=3 \
+    --comparison_model_name="" \  # Please enter the model name, for example "deepseek-chat"
+    --comparison_api_key="" \  # Please enter the api_key
+    --comparison_api_base="" \ # Please enter the url, for example "https://api.deepseek.com/v1"
+    --deduplicated_patches_root ""  # Please enter the absolute path obtained in Phase 1， for example "/home/PheenixPepair/trajectories/root/locate__openai--GLM-4.7__t-0.70__p-1.00__c-0.00___swe_bench_verified_test"
 ```
+
 
 
 
