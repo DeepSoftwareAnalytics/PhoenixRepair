@@ -104,8 +104,9 @@ sweagent run-batch \
     --comparison_model_name="" \  # Please enter the model name, for example "deepseek-chat"
     --comparison_api_key="" \   # Please enter the api_key
     --comparison_api_base="" \  # Please enter the url, for example "https://api.deepseek.com/v1"
-    --deduplicated_patches_root ""  # Please enter the absolute path obtained in Phase 1， for example "/home/PheenixPepair/trajectories/root/locate__openai--GLM-4.7__t-0.70__p-1.00__c-0.00___swe_bench_verified_test"
+    --deduplicated_patches_root ""  # Please enter the absolute path obtained in Phase 1， for example "/home/PhoenixPepair/trajectories/root/locate__openai--GLM-4.7__t-0.70__p-1.00__c-0.00___swe_bench_verified_test"
 ```
+
 
 
 
