@@ -1,0 +1,7 @@
+{
+    "analysis_complete": {
+      "description": "Complete code analysis and generate JSON output with structured findings",
+      "signature": "analysis_complete [-o OUTPUT_FILE] [-f]",
+      "docstring": "Complete the code analysis session by generating a structured JSON output.\n\nThis command validates and saves your analysis results in JSON format, then terminates the session.\n\nOptions:\n  -o, --output OUTPUT_FILE    Specify output JSON file path (default: /root/analysis.json)\n  -f, --force                Force completion without validation stages\n\nThe command expects a JSON structure with analysis_summary, relevant_files, potential_root_causes, recommended_investigation_order, related_test_files, and dependencies."
+    }
+  }
