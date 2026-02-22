@@ -676,9 +676,7 @@ class LiteLLMModel(AbstractModel):
         with GLOBAL_STATS_LOCK:
             GLOBAL_STATS.last_query_timestamp = time.time()
 
-    def _single_query(
-        self, messages: list[dict[str, str]], n: int | None = None, temperature: float | None = None
-    ) -> list[dict]:
+    def _single_query(self, messages: list[dict[str, str]], n: int | None = None, temperature: float | None = None) -> list[dict]:
         self._sleep()
         # Workaround for litellm bug https://github.com/SWE-agent/SWE-agent/issues/1109
         messages_no_cache_control = copy.deepcopy(messages)
@@ -687,16 +685,9 @@ class LiteLLMModel(AbstractModel):
                 del message["cache_control"]
             if "thinking_blocks" in message:
                 del message["thinking_blocks"]
-        input_tokens: int = litellm.utils.token_counter(
-            messages=messages_no_cache_control,
-            model=self.custom_tokenizer["identifier"] if self.custom_tokenizer is not None else self.config.name,
-            custom_tokenizer=self.custom_tokenizer,
-        )
+        input_tokens: int = litellm.utils.token_counter(messages=messages_no_cache_control, model=self.custom_tokenizer["identifier"] if self.custom_tokenizer is not None else self.config.name, custom_tokenizer=self.custom_tokenizer)
         if self.model_max_input_tokens is None:
-            msg = (
-                f"No max input tokens found for model {self.config.name!r}. "
-                "If you are using a local model, you can set `max_input_token` in the model config to override this."
-            )
+            msg = (f"No max input tokens found for model {self.config.name!r}. If you are using a local model, you can set `max_input_token` in the model config to override this.")
             self.logger.warning(msg)
         elif input_tokens > self.model_max_input_tokens > 0:
             msg = f"Input tokens {input_tokens} exceed max tokens {self.model_max_input_tokens}"
@@ -707,13 +698,18 @@ class LiteLLMModel(AbstractModel):
             extra_args["api_base"] = self.config.api_base
         if self.tools.use_function_calling:
             extra_args["tools"] = self.tools.tools
-        # We need to always set max_tokens for anthropic models
+        self.logger.info(f"api_base:{extra_args['api_base']}")
         completion_kwargs = self.config.completion_kwargs
+        completion_kwargs['extra_headers'] = {'anthropic-beta': 'output-128k-2025-02-19'}
+        model_name = self.config.name
+        if "deepseek" or "glm" in self.config.name.lower():
+            completion_kwargs.pop('reasoning_effort', None)
+            self.logger.debug(f"Using official DeepSeek format: {model_name}")
         if self.lm_provider == "anthropic":
             completion_kwargs["max_tokens"] = self.model_max_output_tokens
         try:
-            response: litellm.types.utils.ModelResponse = litellm.completion(  # type: ignore
-                model=self.config.name,
+            response: litellm.types.utils.ModelResponse = litellm.completion(
+                model=model_name,
                 messages=messages,
                 temperature=self.config.temperature if temperature is None else temperature,
                 top_p=self.config.top_p,
@@ -732,43 +728,60 @@ class LiteLLMModel(AbstractModel):
             if "is longer than the model's context length" in str(e):
                 raise ContextWindowExceededError from e
             raise
-        self.logger.debug(f"Response: {response}")
         try:
             cost = litellm.cost_calculator.completion_cost(response, model=self.config.name)
         except Exception as e:
-            self.logger.debug(f"Error calculating cost: {e}, setting cost to 0.")
+            self.logger.debug(f"Error calculating cost: {e}, attempting fallback cost calculation.")
+            fallback_cost = 0
+            if "deepseek" in self.config.name.lower():
+                try:
+                    fallback_models = ["deepseek-chat", "deepseek/deepseek-chat"]
+                    for fallback_model in fallback_models:
+                        try:
+                            fallback_cost = litellm.cost_calculator.completion_cost(response, model=fallback_model)
+                            self.logger.info(f"Using fallback model '{fallback_model}' for cost calculation: ${fallback_cost:.6f}")
+                            break
+                        except Exception:
+                            continue
+                    if fallback_cost == 0:
+                        input_tokens = litellm.utils.token_counter(messages=messages_no_cache_control, model=self.config.name)
+                        output_tokens = sum(litellm.utils.token_counter(text=choice.message.content or "", model=self.config.name) for choice in response.choices)
+                        fallback_cost = (input_tokens * 1.0 + output_tokens * 3.0) / 1000000
+                        self.logger.info(f"Using estimated DeepSeek pricing for cost calculation: ${fallback_cost:.6f}")
+                except Exception as fallback_error:
+                    self.logger.debug(f"Fallback cost calculation also failed: {fallback_error}")
+                    fallback_cost = 0
             if self.config.per_instance_cost_limit > 0 or self.config.total_cost_limit > 0:
-                msg = (
-                    f"Error calculating cost: {e} for your model {self.config.name}. If this is ok "
-                    "(local models, etc.), please make sure you set `per_instance_cost_limit` and "
-                    "`total_cost_limit` to 0 to disable this safety check."
-                )
-                self.logger.error(msg)
-                raise ModelConfigurationError(msg)
-            cost = 0
+                if fallback_cost == 0:
+                    msg = (
+                        f"Error calculating cost: {e} for your model {self.config.name}. "
+                        f"Fallback cost calculation also failed. If this is ok (local models, etc.), "
+                        f"please set `per_instance_cost_limit` and `total_cost_limit` to 0 to disable this safety check."
+                    )
+                    self.logger.error(msg)
+                    raise ModelConfigurationError(msg)
+                else:
+                    self.logger.warning(f"Using fallback cost calculation due to: {e}")
+                    cost = fallback_cost
+            else:
+                cost = fallback_cost
+        
         choices: litellm.types.utils.Choices = response.choices  # type: ignore
         n_choices = n if n is not None else 1
         outputs = []
         output_tokens = 0
         for i in range(n_choices):
             output = choices[i].message.content or ""
-            output_tokens += litellm.utils.token_counter(
-                text=output,
-                model=self.custom_tokenizer["identifier"] if self.custom_tokenizer is not None else self.config.name,
-                custom_tokenizer=self.custom_tokenizer,
-            )
+            output_tokens += litellm.utils.token_counter(text=output, model=self.custom_tokenizer["identifier"] if self.custom_tokenizer is not None else self.config.name, custom_tokenizer=self.custom_tokenizer)
             output_dict = {"message": output}
             if self.tools.use_function_calling:
-                if response.choices[i].message.tool_calls:  # type: ignore
-                    tool_calls = [call.to_dict() for call in response.choices[i].message.tool_calls]  # type: ignore
+                if response.choices[i].message.tool_calls:
+                    tool_calls = [call.to_dict() for call in response.choices[i].message.tool_calls]
                 else:
                     tool_calls = []
                 output_dict["tool_calls"] = tool_calls
-            if (
-                hasattr(response.choices[i].message, "thinking_blocks")  # type: ignore
-                and response.choices[i].message.thinking_blocks  # type: ignore
-            ):
-                output_dict["thinking_blocks"] = response.choices[i].message.thinking_blocks  # type: ignore
+            if (hasattr(response.choices[i].message, "thinking_blocks") and response.choices[i].message.thinking_blocks):
+                output_dict["thinking_blocks"] = response.choices[i].message.thinking_blocks
             outputs.append(output_dict)
         self._update_stats(input_tokens=input_tokens, output_tokens=output_tokens, cost=cost)
         return outputs
