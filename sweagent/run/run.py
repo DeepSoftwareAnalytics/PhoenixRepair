@@ -34,7 +34,7 @@ import argparse
 
 def get_cli():
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("command", choices=["run", "run-batch", "run-replay", "traj-to-demo", "run-api", "merge-preds", "inspect", "inspector", "r", "b", "i", "I", "extract-pred", "compare-runs", "cr", "remove-unfinished", "ru", "quick-stats", "qs", "shell", "sh"], nargs="?")
+    parser.add_argument("command", choices=["run", "run-batch", "run-locate", "run-replay", "traj-to-demo", "run-api", "merge-preds", "inspect", "inspector", "r", "b", "i", "I", "extract-pred", "compare-runs", "cr", "remove-unfinished", "ru", "quick-stats", "qs", "shell", "sh"], nargs="?")
     parser.add_argument("-h", "--help", action="store_true", help="Show this help message and exit")
     return parser
 
