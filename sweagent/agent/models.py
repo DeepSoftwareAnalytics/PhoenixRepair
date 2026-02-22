@@ -746,7 +746,7 @@ class LiteLLMModel(AbstractModel):
                     if fallback_cost == 0:
                         input_tokens = litellm.utils.token_counter(messages=messages_no_cache_control, model=self.config.name)
                         output_tokens = sum(litellm.utils.token_counter(text=choice.message.content or "", model=self.config.name) for choice in response.choices)
-                        fallback_cost = (input_tokens * 1.0 + output_tokens * 3.0) / 1000000
+                        fallback_cost = (input_tokens * 0.28 + output_tokens * 0.42) / 1_000_000
                         self.logger.info(f"Using estimated DeepSeek pricing for cost calculation: ${fallback_cost:.6f}")
                 except Exception as fallback_error:
                     self.logger.debug(f"Fallback cost calculation also failed: {fallback_error}")
