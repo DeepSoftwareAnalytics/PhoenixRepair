@@ -132,7 +132,6 @@ def make_regression_spec(instance: SWEbenchInstance) -> TestSpec:
         namespace=specs.get("namespace", "swebench"),
     )
 
-
 def make_regression_script_list(instance, specs, env_name, repo_directory, base_commit):
     HEREDOC_DELIMITER = "EOF_114329324912"
     fake_apply_test_patch_command = (f"git apply -v - <<'{HEREDOC_DELIMITER}'\n{NOOP_PATCH_2}\n{HEREDOC_DELIMITER}")
@@ -154,7 +153,6 @@ def make_regression_script_list(instance, specs, env_name, repo_directory, base_
     eval_commands += [fake_apply_test_patch_command, test_command]
     return eval_commands
 
-
 def rearrange_patches(test_specs):
     """
     rearrange the patches such that slower instance_ids are evaluated first
@@ -171,7 +169,6 @@ def rearrange_patches(test_specs):
         return rearranged_test_specs
     else:
         return test_specs
-
 
 def run_tests(location_data:list, instance_ids: list, model_patches: list, max_workers: int, run_id: str, timeout: int, apply_model_patch=True, dataset_name="princeton-nlp/SWE-bench_Verified"):
     assert len(instance_ids) == len(model_patches), "There must be the same number of instance_ids as model patches"
