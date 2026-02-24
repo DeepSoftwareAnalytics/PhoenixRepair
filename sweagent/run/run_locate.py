@@ -95,18 +95,6 @@ def filter_instances_by_ids(instances: list[BatchInstance], target_ids: set[str]
     return filtered_instances
 
 def deduplicate_patches(sample_paths: list[Path], output_file: Path, logger, min_ratio: float = 0.5) -> dict:
-    """
-    从多个sample的patch文件中去重
-    去重规则：
-    - 如果file_path相同且current_code的最长连续匹配行数 >= 较短代码长度的min_ratio，认为是重复
-    Args:
-        sample_paths: 样本目录列表
-        output_file: 输出的jsonl文件路径
-        logger: 日志记录器
-        min_ratio: 最小匹配比例（默认0.5，即二分之一）
-    Returns:
-        去重统计信息
-    """
     all_modifications = []
     unique_modifications = []
     total_count = 0
@@ -185,14 +173,6 @@ def are_modifications_similar(mod1: dict, mod2: dict, min_ratio: float = 0.5) ->
     return is_similar, details
 
 def find_longest_consecutive_match(code1: str, code2: str) -> tuple[int, int]:
-    """
-    找到两段代码中最长的连续匹配行数
-    Args:
-        code1: 第一段代码
-        code2: 第二段代码
-    Returns:
-        (最长连续匹配的行数, code1的总行数)
-    """
     lines1 = get_code_lines(code1)
     lines2 = get_code_lines(code2)
     if not lines1 or not lines2:
@@ -209,14 +189,6 @@ def get_code_lines(code: str) -> list[str]:
     return [line.strip() for line in code.strip().split('\n') if line.strip()]
 
 def deduplicate_patches_by_first_path_and_count(sample_paths: list[Path], output_file: Path, logger, min_unique: int = 2) -> dict:
-    """
-    直接从 sample1-sampleN 读取 .patch，按 (第一个 file_path, files_to_modify 数量) 去重。
-    仅当去重后 unique >= min_unique 才写出 output_file，否则跳过不生成文件。
-    输出 jsonl，每行:
-      {"files_to_modify": [...], "source_sample": "xxx-sampleK"}
-    Returns:
-      统计信息 dict
-    """
     all_patches = []
     total_read = 0
     invalid_count = 0
