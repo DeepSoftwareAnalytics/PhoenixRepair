@@ -29,7 +29,6 @@ logger = get_logger("swea-config", emoji="🔧")
 
 class AbstractInstanceSource(ABC):
     """Anything that adheres to this standard can be used to load instances."""
-
     @abstractmethod
     def get_instance_configs(self) -> list[EnvironmentConfig]: ...
 
@@ -38,10 +37,11 @@ class BatchInstance(BaseModel):
     """A single instance in a batch of instances.
     This specifies both the environment configuration and the problem statement.
     """
-
     env: EnvironmentConfig
     problem_statement: ProblemStatementConfig
-
+    location_patch_data: dict | None = Field(default=None, description="Location patch data for guided editing")
+    previous_round_info: dict | None = Field(default=None, description="Previous round information for iterative refinement")
+    
 
 def _slice_spec_to_slice(slice_spec: str) -> slice:
     if slice_spec == "":
@@ -54,17 +54,11 @@ def _slice_spec_to_slice(slice_spec: str) -> slice:
         return slice(values[0], values[1])
     if len(parts) == 3:
         return slice(values[0], values[1], values[2])
-    msg = (
-        f"Invalid slice specification: {slice_spec!r}. "
-        "Here's the expected format: stop or start:stop or start:stop:step "
-        "(i.e., it behaves exactly like python's list slicing `list[slice]`)."
-    )
+    msg = (f"Invalid slice specification: {slice_spec!r}. Here's the expected format: stop or start:stop or start:stop:step (i.e., it behaves exactly like python's list slicing `list[slice]`).")
     raise ValueError(msg)
 
 
-def _filter_batch_items(
-    instances: list[BatchInstance], *, filter_: str, slice_: str = "", shuffle: bool = False
-) -> list[BatchInstance]:
+def _filter_batch_items(instances: list[BatchInstance], *, filter_: str, slice_: str = "", shuffle: bool = False) -> list[BatchInstance]:
     if shuffle:
         instances = sorted(instances.copy(), key=lambda x: x.problem_statement.id)
         random.seed(42)
@@ -72,6 +66,7 @@ def _filter_batch_items(
     before_filter = len(instances)
     instances = [instance for instance in instances if re.match(filter_, instance.problem_statement.id)]
     after_filter = len(instances)
+    print(after_filter)
     if before_filter != after_filter:
         logger.info("Instance filter: %d -> %d instances", before_filter, after_filter)
     if slice_:
@@ -175,7 +170,7 @@ class SimpleBatchInstance(BaseModel):
         if image_name is None:
             # Docker doesn't allow double underscore, so we replace them with a magic token
             id_docker_compatible = iid.replace("__", "_1776_")
-            image_name = f"docker.io/swebench/sweb.eval.x86_64.{id_docker_compatible}:latest".lower()
+            image_name = f"swebench/sweb.eval.x86_64.{id_docker_compatible}:latest".lower()
         extra_fields = {}
         if "image_assets" in instance:
             issue_images = json.loads(instance["image_assets"])["problem_statement"]
@@ -267,28 +262,20 @@ class InstancesFromHuggingFace(BaseModel, AbstractInstanceSource):
 
 class SWEBenchInstances(BaseModel, AbstractInstanceSource):
     """Load instances from SWE-bench."""
-
     subset: Literal["lite", "verified", "full", "multimodal", "multilingual"] = "lite"
     """Subset of swe-bench to use"""
-
     # IMPORTANT: Do not call this `path`, because then if people do not specify instance.type,
     # it might be resolved to ExpertInstancesFromFile or something like that.
     path_override: str | Path | None = None
     """Allow to specify a different huggingface dataset name or path to a huggingface
     dataset. This will override the automatic path set by `subset`.
     """
-
     split: Literal["dev", "test"] = "dev"
-
-    deployment: DeploymentConfig = Field(
-        default_factory=lambda: DockerDeploymentConfig(image="python:3.11"),
-    )
+    deployment: DeploymentConfig = Field(default_factory=lambda: DockerDeploymentConfig(image="python:3.11"))
     """Deployment configuration. Note that the image_name option is overwritten by the images specified in the task instances.
     """
-
     type: Literal["swe_bench"] = "swe_bench"
     """Discriminator for (de)serialization/CLI. Do not change."""
-
     filter: str = ".*"
     """Regular expression to filter the instances by instance id."""
     slice: str = ""
@@ -298,38 +285,24 @@ class SWEBenchInstances(BaseModel, AbstractInstanceSource):
     """
     shuffle: bool = False
     """Shuffle the instances (before filtering and slicing)."""
-
     evaluate: bool = False
     """Run sb-cli to evaluate"""
 
     def _get_dataset_path(self) -> str:
         if self.path_override is not None:
             return str(self.path_override)
-        dataset_mapping = {
-            "full": "princeton-nlp/SWE-Bench",
-            "verified": "princeton-nlp/SWE-Bench_Verified",
-            "lite": "princeton-nlp/SWE-Bench_Lite",
-            "multimodal": "princeton-nlp/SWE-Bench_Multimodal",
-            "multilingual": "swe-bench/SWE-Bench_Multilingual",
-        }
-
+        dataset_mapping = {"full": "princeton-nlp/SWE-Bench", "verified": "princeton-nlp/SWE-Bench_Verified", "lite": "princeton-nlp/SWE-Bench_Lite", "multimodal": "princeton-nlp/SWE-Bench_Multimodal", "multilingual": "swe-bench/SWE-Bench_Multilingual"}
         if self.subset not in dataset_mapping:
             msg = f"Unsupported subset: {self.subset}"
             raise ValueError(msg)
-
         return dataset_mapping[self.subset]
 
     def get_instance_configs(self) -> list[BatchInstance]:
         from datasets import load_dataset
-
         ds: list[dict[str, Any]] = load_dataset(self._get_dataset_path(), split=self.split)  # type: ignore
-
         if isinstance(self.deployment, DockerDeploymentConfig):
             self.deployment.platform = "linux/amd64"
-
-        instances = [
-            SimpleBatchInstance.from_swe_bench(instance).to_full_batch_instance(self.deployment) for instance in ds
-        ]
+        instances = [SimpleBatchInstance.from_swe_bench(instance).to_full_batch_instance(self.deployment) for instance in ds]
         return _filter_batch_items(instances, filter_=self.filter, slice_=self.slice, shuffle=self.shuffle)
 
     @property
