@@ -713,17 +713,17 @@ class RunBatch:
 
     def _collect_location_trajectories(self, locations: list, round_num: int) -> list[dict]:
         locations_data = []
-        # select_regression_file = ""
-        # select_regression_dict = dict()
-        # with open(select_regression_file, 'r', encoding='utf-8') as f:
-        #     for item in f:
-        #         item = json.loads(item)
-        #         select_regression_dict[item['instance_id']] = dict()
-        #         select_regression_dict[item['instance_id']]['tests_passing_in_original_repo'] = item['tests_passing_in_original_repo']
+        select_regression_file = "/home/jiangty9/PhoenixRepair/sweagent/run/select_regression/output.jsonl"
+        select_regression_dict = dict()
+        with open(select_regression_file, 'r', encoding='utf-8') as f:
+            for item in f:
+                item = json.loads(item)
+                select_regression_dict[item['instance_id']] = dict()
+                select_regression_dict[item['instance_id']]['tests_passing_in_original_repo'] = item['tests_passing_in_original_repo']
         for loc in locations:
             instance_id = loc.problem_statement.id
             original_id = re.sub(r'-location-\d+.*$', '', instance_id)
-            # loc_item = select_regression_dict[original_id]
+            loc_item = select_regression_dict[original_id]
             traj_file = self.output_dir / instance_id / f"{instance_id}.traj"
             if not traj_file.exists():
                 continue
@@ -741,6 +741,7 @@ class RunBatch:
                     'exit_status': data.get('info', {}).get('exit_status', 'unknown'),
                     'trajectory': data.get('trajectory', []),
                     'round': round_num,
+                    'tests_passing_in_original_repo' : loc_item['tests_passing_in_original_repo']
                 })
             except Exception as e:
                 self.logger.error(f"读取失败 {instance_id}: {e}")
@@ -764,9 +765,12 @@ class RunBatch:
             expected_count = math.ceil(len(locations_data) / 2)
         self.logger.info(f"Round{round_num}: 从{len(locations_data)}个location中选{expected_count}个")
         # use regression test
-        # for data in locations_data:
-        #     regression_dict = _run_regression(data)
-        #     data['regression_result'] = regression_dict
+        llm_config = None
+        if self._comparator_config:
+            llm_config = {'api_key': self._comparator_config.get('api_key', ''), 'api_base': self._comparator_config.get('base_url', ''), 'model_name': self._comparator_config.get('model_name', '')}
+        for data in locations_data:
+            regression_dict = _run_regression(data, llm_config=llm_config)
+            data['regression_result'] = regression_dict
         analysis_dir = self.output_dir / f"{original_id}-analysis"
         analysis_dir.mkdir(parents=True, exist_ok=True)
         analysis_file = analysis_dir / f"round{round_num}_comparison.json"
