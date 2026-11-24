@@ -8,11 +8,8 @@ class PromptBuilder:
     def __init__(self):
         self.logger = logging.getLogger("phoenix.prompts")
 
-    def _build_comparison_prompt(self, problem_statement: str, samples: list[dict], num_samples: int, select_top_half: bool = False) -> str:
-        if select_top_half:
-            import math
-            top_n = math.ceil(num_samples / 2)
-            prompt = f"""You are an expert code debugging analyst. Compare multiple solution attempts for the same SWE-bench task and select the TOP {top_n} best patches (approximately half).
+    def _build_comparison_prompt(self, problem_statement: str, samples: list[dict], num_samples: int) -> str:
+        prompt = f"""You are an expert code debugging analyst. Compare multiple solution attempts for the same SWE-bench task and identify the best generation patch.
 
 ## Problem Statement
 {problem_statement}
@@ -20,60 +17,12 @@ class PromptBuilder:
 ## Solution Attempts
 **IMPORTANT:** The samples are presented in RANDOM ORDER to avoid position bias. Evaluate each solution independently based on technical merit only.
 """
-            for sample in samples:
-                prompt += f"""### Sample {sample['index']}
-**Execution Summary:** {len(sample['trajectory'])} steps, Exit: {sample['exit_status']}, Patch: {'Yes' if sample['submission'] else 'No'}
+        for sample in samples:
+            prompt += f"""### Sample {sample['index']}
+**Execution Summary:** {len(sample['trajectory'])} steps, Exit: {sample['exit_status']}, Patch: Yes
 """
-                if sample.get('regression_evidence'):
-                    prompt += '\n**Measured repository regression evidence:**\n' + json.dumps(sample['regression_evidence'], ensure_ascii=False) + '\n'
-                if sample["submission"]:
-                    prompt += f"\n**Patch:**\n```\n{sample['submission']}\n```\n\n"
-                else:
-                    prompt += "\n**Patch:** No submission\n\n"
-
-            prompt += f"""## Analysis Requirements
-
-Compare all samples and provide:
-
-1. **Select Top {top_n} Samples:** Which sample numbers have the most correct solutions?
-
-2. **Reasoning:** Why is this sample better than others? Consider:
-   - Patch correctness and completeness
-   - Problem understanding accuracy
-   - Edge case handling
-   
-3. **Key Insights for Next Attempt:** What can we learn from all attempts to guide the next solution? Be specific about:
-   - Which approaches worked well
-   - Specific files/functions that need attention
-
-## Output Format
-**You MUST strictly follow this format:**
-
-**TOP_SAMPLES:** [comma-separated list, e.g., "1,3,5,7"]
-
-**REASONING:**
-[Explanation of why these {top_n} samples are best]
-"""
-        else:
-            prompt = f"""You are an expert code debugging analyst. Compare multiple solution attempts for the same SWE-bench task and identify the best generation patch.
-
-## Problem Statement
-{problem_statement}
-
-## Solution Attempts
-**IMPORTANT:** The samples are presented in RANDOM ORDER to avoid position bias. Evaluate each solution independently based on technical merit only.
-"""
-            for sample in samples:
-                prompt += f"""### Sample {sample['index']}
-**Execution Summary:** {len(sample['trajectory'])} steps, Exit: {sample['exit_status']}, Patch: {'Yes' if sample['submission'] else 'No'}
-"""
-                if sample.get('regression_evidence'):
-                    prompt += '\n**Measured repository regression evidence:**\n' + json.dumps(sample['regression_evidence'], ensure_ascii=False) + '\n'
-                if sample['submission']:
-                    prompt += f"\n**Patch:**\n```\n{sample['submission']}\n```\n\n"
-                else:
-                    prompt += "\n**Patch:** No submission\n\n"
-            prompt += f"""## Analysis Requirements
+            prompt += f"\n**Patch:**\n```\n{sample['submission']}\n```\n\n"
+        prompt += f"""## Analysis Requirements
 
 Compare all samples and provide:
 
@@ -102,8 +51,8 @@ Keep response under 600 words. Focus on concrete technical differences and actio
 """
         return "You are PhoenixRepair.\n" + prompt
 
-    def _generate_location_insights_from_patch(self, patch_data: dict, previous_round_info: dict = None) -> str:
-        """从 patch data 生成 location insights，包含前一轮的反思"""
+    def _generate_location_insights_from_patch(self, patch_data: dict) -> str:
+        """Render the complete localization plan for the patch author."""
         insights_parts = []
         compiled = patch_data.get('schema_version') in ('location_candidate_v3', 'location_candidate_v4')
         if patch_data.get('hypothesis'):
@@ -131,22 +80,18 @@ Keep response under 600 words. Focus on concrete technical differences and actio
             if patch_data.get('requirement_coverage'):
                 insights_parts.append('**Coverage of the issue requirements:**')
                 for item in patch_data['requirement_coverage']:
-                    if patch_data.get('planning_mode') == 'complete_strategy_v1':
-                        requirement = next(r['text'] for r in patch_data['requirements'] if r['id'] == item['requirement_id'])
-                    else:
-                        requirement = patch_data['requirements'][item['requirement_index']-1]
+                    requirement = next(r['text'] for r in patch_data['requirements'] if r['id'] == item['requirement_id'])
                     refs = ', '.join(item['location_ids']) or 'already satisfied; verify evidence'
                     insights_parts.append(f"- {requirement} [{refs}]: {item['explanation']}")
                     if item.get('evidence'):
                         insights_parts.append('  Current-source evidence: ' + json.dumps(item['evidence'], ensure_ascii=False))
-            if patch_data.get('planning_mode') == 'complete_strategy_v1':
-                insights_parts.append('**Whole repair mechanism:**\n' + patch_data['implementation_outline'])
-                insights_parts.append('**Cooperating changes and unchanged dependencies:**')
-                for item in patch_data['dependency_review']:
-                    insights_parts.append(f"- {item['area']} ({item['status']}): {item['explanation']} "
-                                          f"[{', '.join(item['location_ids'])}]")
-                    if item.get('evidence'):
-                        insights_parts.append('  Evidence: ' + json.dumps(item['evidence'], ensure_ascii=False))
+            insights_parts.append('**Whole repair mechanism:**\n' + patch_data['implementation_outline'])
+            insights_parts.append('**Cooperating changes and unchanged dependencies:**')
+            for item in patch_data['dependency_review']:
+                insights_parts.append(f"- {item['area']} ({item['status']}): {item['explanation']} "
+                                      f"[{', '.join(item['location_ids'])}]")
+                if item.get('evidence'):
+                    insights_parts.append('  Evidence: ' + json.dumps(item['evidence'], ensure_ascii=False))
             insights_parts.append(
                 'This is one complete alternative repair plan, not a proven fix. Evaluate its hypothesis '
                 'and unresolved questions against the issue and current source while implementing the patch. '
@@ -155,39 +100,14 @@ Keep response under 600 words. Focus on concrete technical differences and actio
                 'Do not claim validation without evidence or redesign unrelated behavior.')
         if patch_data.get('schema_version') == 'location_checks_v1':
             insights_parts.append(f"Candidate: {patch_data['id']} (one complete location set)")
-            if patch_data.get('planning_mode') in ('locations_only_v1', 'complete_strategy_v1'):
-                insights_parts.append('Localization supplied locations and short intentions only, not an implementation or tests. '
-                                      'Implement this complete plan and derive the necessary tests and verification from the issue '
-                                      'and current source during patch generation. If it cannot address the issue, report why.')
-            else:
-                insights_parts.append('**Verification points for this location set:**')
-                for q in patch_data['unresolved_questions']:
-                    insights_parts.append(f"- [{', '.join(q['location_ids'])}] {q['question']}")
-                insights_parts.append('Implement the cooperating changes at the complete locations below and verify these points. '
-                                      'If the set cannot address the issue, report the concrete problem.')
-        if previous_round_info:
-            prev_round = previous_round_info.get('round', -1)
-            prev_patch = previous_round_info.get('patch', '')
-            prev_status = previous_round_info.get('exit_status', 'unknown')
-            insights_parts.append("**Previous Attempt Reflection:**\n")
-            insights_parts.append(f"In Round {prev_round}, we attempted to fix this location with the following approach:\n")
-            insights_parts.append(f"- Exit Status: {prev_status}")
-            if prev_patch:
-                insights_parts.append(f"\n**Previous Patch:**")
-                insights_parts.append("```")
-                insights_parts.append(prev_patch)
-                insights_parts.append("```\n")
-                insights_parts.append("**Instructions for This Round:**")
-                insights_parts.append("- Reflect on the previous patch")
-                insights_parts.append("- Improve upon the previous solution")
+            insights_parts.append('Localization supplied locations and short intentions only, not an implementation or tests. '
+                                  'Implement this complete plan and derive the necessary tests and verification from the issue '
+                                  'and current source during patch generation. If it cannot address the issue, report why.')
         files_to_modify = patch_data.get('files_to_modify', [])
         insights_parts.append("**Error Code Location Information:**\n")
         insights_parts.append("I will provide you with the location information of the buggy code below. ")
-        if patch_data.get('planning_mode') == 'complete_strategy_v1':
-            insights_parts.append("Use these locations as starting points; inspect affected callers and consumers "
-                                  "and include necessary cooperating edits supported by the issue and source.\n\n")
-        else:
-            insights_parts.append("Please make your modifications at the locations specify for the erroneous code.\n\n")
+        insights_parts.append("Use these locations as starting points; inspect affected callers and consumers "
+                              "and include necessary cooperating edits supported by the issue and source.\n\n")
         for file_info in files_to_modify:
             file_path = file_info.get('file_path', 'unknown')
             modifications = file_info.get('modifications', [])
@@ -213,28 +133,20 @@ Keep response under 600 words. Focus on concrete technical differences and actio
                 insights_parts.append(current_code)
                 insights_parts.append("```\n")
         insights_parts.append("\n**Final Instructions:**")
-        if previous_round_info:
-            insights_parts.append("- Learn from the previous attempt and improve your solution")
-        if patch_data.get('planning_mode') == 'complete_strategy_v1':
-            insights_parts.append('- Implement this strategy as a whole and check every requirement, including unchanged behavior. '
-                                  'The plan is a hypothesis, not an oracle. If current source reveals a necessary cooperating '
-                                  'edit outside its anchors, inspect and include it; explain that addition and its requirement. '
-                                  'Correct the mechanism when evidence requires it and explain why; do not omit '
-                                  'a requirement to fit the listed ranges. '
-                                  'Run relevant current-repository checks, record results honestly, and inspect the final diff '
-                                  'against the requirement coverage before submission.')
-        else:
-            insights_parts.append("- Please make modifications at the code locations mentioned above")
-            insights_parts.append("- Do NOT make changes outside these locations")
+        insights_parts.append('- Implement this strategy as a whole and check every requirement, including unchanged behavior. '
+                              'The plan is a hypothesis, not an oracle. If current source reveals a necessary cooperating '
+                              'edit outside its anchors, inspect and include it; explain that addition and its requirement. '
+                              'Correct the mechanism when evidence requires it and explain why; do not omit '
+                              'a requirement to fit the listed ranges. '
+                              'Run relevant current-repository checks, record results honestly, and inspect the final diff '
+                              'against the requirement coverage before submission.')
         return "\n".join(insights_parts)
 
     def _enhance_agent_config_with_insights(self, original_config: AgentConfig, insights: str, num_samples: int) -> AgentConfig:
         """使用insights增强agent配置"""
         enhanced_config = original_config.model_copy(deep=True)
-        # enhanced_config.use_change_history_method = False
         original_instance_template = enhanced_config.templates.instance_template
-        if insights.strip():
-            enhanced_instance_template = f"""Based on {num_samples} previous solution attempts at different code locations for this task, we have conducted a comparative analysis to identify the best approach and key learnings:
+        enhanced_instance_template = f"""Based on {num_samples} previous solution attempts at different code locations for this task, we have conducted a comparative analysis to identify the best approach and key learnings:
 
 {insights}
 
@@ -246,8 +158,6 @@ Please solve the task by leveraging these insights from previous attempts. Focus
 # Original Task Instructions
 {original_instance_template}
 """
-        else:
-            enhanced_instance_template = original_instance_template
         enhanced_config.templates.instance_template = enhanced_instance_template
         self.logger.info(f"Enhanced instance template with comparison insights (length: {len(insights)} chars)")
         return enhanced_config

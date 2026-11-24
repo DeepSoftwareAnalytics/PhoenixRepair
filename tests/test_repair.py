@@ -26,8 +26,8 @@ def test_multicandidate_shared_budget_and_fresh_final(task, candidate, settings)
     backend = Backend()
     observed = []
 
-    def summary(task, rows, cfg, stage, key, **kw):
-        assert len(rows) == 2 and kw["shared_budget"]
+    def summary(task, rows, cfg, stage, key):
+        assert len(rows) == 2
         observed.append(cfg["model"])
         return "Both strategies suggest changing the constant."
 
@@ -234,10 +234,38 @@ def test_resume_uses_bound_stage_paths(task, candidate, settings):
         job["stage"] = stage
     bind(directory / "task-identity.json", dict(task=task, jobs=jobs, candidates=candidates,
                                                model=settings["model"], method=settings["method"]))
-    def compare(task, results, settings, stage, key, *, shared_budget):
+    def compare(task, results, settings, stage, key):
         assert stage == directory / "summary"
         return "Use the second strategy."
     result = run_task(task, settings, Backend(), "fixture", candidates, summary_fn=compare)
     assert result["status"] == "completed"
     assert json.loads((directory / "plan.json").read_text()) == jobs
     assert not (directory / "location-1").exists()
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_failed_or_unknown_summary_request_stays_charged(tmp_path, monkeypatch, task, settings, interrupted):
+    from phoenix import summary
+    from sweagent.agent import request_pacing
+
+    directory = tmp_path / "final/comparison"
+    patch = tmp_path / "candidate.patch"
+    patch.write_text("nonempty candidate")
+    rows = [dict(patch=str(patch), steps=1)] * 2
+    sent = []
+    class Session:
+        def post(self, *args, **kwargs):
+            sent.append(kwargs["json"])
+            raise summary.requests.Timeout("fixture")
+        def close(self):
+            pass
+    monkeypatch.setattr(summary.requests, "Session", Session)
+    monkeypatch.setattr(request_pacing, "wait_for_request", lambda *args: None)
+    if interrupted:
+        write_json(directory / "state.json", dict(phase="inflight", attempts=1, transport_attempt=1,
+                   format_attempt=0, usage={}, usage_applied=[], unknown_requests=[]))
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="Summary"):
+            summary.summarize(task, rows, settings, directory, "fixture")
+    assert len(sent) == (0 if interrupted else 1)
+    assert json.loads((directory / "usage.json").read_text())["budget_calls"] == 1

@@ -89,13 +89,12 @@ def run_task(task, settings, backend, key, candidates=None, summary_fn=summarize
         for job in jobs:
             stage = directory / job["stage"]
             if job["kind"] == "summary":
-                summary = summary_fn(task, results, settings, stage, key, shared_budget=method in REPAIR_METHODS)
-                if method in REPAIR_METHODS:
-                    used += 1
+                summary = summary_fn(task, results, settings, stage, key)
+                used += 1
                 continue
             candidate = candidates[len(results)] if job["kind"] == "candidate" else None
             allowance = job["allowance"]
-            if method in REPAIR_METHODS and job["kind"] == "final":
+            if job["kind"] == "final":
                 allowance = settings["max_steps"] - used
                 if allowance < 1:
                     raise RuntimeError("No generation budget remains for final PhoenixRepair")
