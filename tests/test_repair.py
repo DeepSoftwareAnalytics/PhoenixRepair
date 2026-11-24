@@ -78,12 +78,47 @@ def test_frozen_location_identity_and_complete_coverage(tmp_path, task, candidat
         load_location(tmp_path, task, model)
 
 
-@pytest.mark.parametrize("model", ["glm-5.2", "qwen3.7-plus"])
+@pytest.mark.parametrize("model,api_model,temp,top_p,context,output,thinking", [
+    ("deepseek-v3.1", "deepseek-chat", 0.6, 0.95, 131072, None, False),
+    ("deepseek-v3.2", "deepseek-chat", 1.0, 0.95, 131072, None, False),
+    ("qwen3-coder-plus", "qwen3-coder-plus", 0.7, 0.80, 1000000, 65536, False),
+    ("glm-4.7", "glm-4.7", 0.7, 1.00, 202752, 131072, True),
+    ("minimax-m2.5", "MiniMax-M2.5", 1.0, 0.95, 204800, 32768, True),
+    ("glm-5.2", "glm-5.2", 1.0, 1.0, 1048576, 131072, False),
+    ("qwen3.7-plus", "qwen3.7-plus", 1.0, 0.95, 1000000, 131072, False),
+    ("qwen3.7-plus-thinking", "qwen3.7-plus", 1.0, 0.95, 1000000, 131072, True),
+    ("qwen-3.8-max", "qwen-3.8-max", 1.0, 0.95, 1000000, 131072, False),
+])
 @pytest.mark.parametrize("candidate_count", [1, 2])
-def test_complete_localization_to_final_patch(monkeypatch, tmp_path, task, candidate, settings, model, candidate_count):
+def test_complete_localization_to_final_patch(monkeypatch, tmp_path, task, candidate, settings, model, candidate_count,
+                                             api_model, temp, top_p, context, output, thinking):
     """Exercise real localization tools and handoff; only API/Docker are faked."""
     from phoenix import pipeline, localization, summary
-    settings.update(model=model, stage="all", concurrency=1)
+    from phoenix.settings import ROOT, load_settings, model_config
+    settings = load_settings("PhoenixRepair", ROOT / "configs/models" / model / "PhoenixRepair.yaml", {
+        "output": settings["output"], "runtime": settings["runtime"], "concurrency": 1,
+    })
+    assert settings["max_input_tokens"] == context
+    gen = model_config(model, settings["api_base"], shared_budget_mode=True, context_settings=settings)
+    assert gen["name"] == "openai/" + api_model
+    assert (gen["temperature"], gen["top_p"], gen["max_input_tokens"]) == (temp, top_p, context)
+    assert gen.get("preserve_thinking", False) == thinking
+
+    def check_request(payload):
+        assert (payload["model"], payload["temperature"], payload["top_p"]) == (api_model, temp, top_p)
+        if output is None:
+            assert "max_tokens" not in payload
+        else:
+            assert payload["max_tokens"] == output
+        if model in {"glm-5.2", "qwen3.7-plus", "qwen3.7-plus-thinking", "qwen-3.8-max"}:
+            assert payload["enable_thinking"] is thinking
+        elif model == "glm-4.7":
+            assert payload["thinking"] == {"type": "enabled"}
+        else:
+            assert "enable_thinking" not in payload
+
+    check_request(dict(model=api_model, temperature=gen["temperature"], top_p=gen["top_p"],
+                       **gen["completion_kwargs"], **gen["completion_kwargs"]["extra_body"]))
     source = tmp_path / "source"
     (source / "repo").mkdir(parents=True)
     (source / "repo/app.py").write_text("value = 1\n")
@@ -105,8 +140,8 @@ def test_complete_localization_to_final_patch(monkeypatch, tmp_path, task, candi
     events = []
     def api(session, endpoint, key, payload, directory, **kwargs):
         assert payload["messages"][0]["content"].startswith("You are PhoenixRepair.")
-        assert payload["model"] == model
-        assert payload["max_tokens"] == 32768 and kwargs["timeout"] == 600
+        check_request(payload)
+        assert kwargs["timeout"] == 600
         name, arguments = next(pending)
         events.append(name)
         return dict(choices=[dict(message=dict(role="assistant", content="", tool_calls=[dict(
@@ -115,7 +150,7 @@ def test_complete_localization_to_final_patch(monkeypatch, tmp_path, task, candi
     monkeypatch.setattr(localization, "export_source", lambda *a, **kw: source)
     class FakeSession:
         def post(self, url, **kwargs):
-            assert kwargs["json"]["model"] == model and kwargs["json"]["temperature"] == 0
+            check_request(kwargs["json"])
             assert kwargs["json"]["messages"][0]["content"].startswith("You are PhoenixRepair.")
             events.append("summary")
             class Response:

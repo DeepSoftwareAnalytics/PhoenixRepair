@@ -21,26 +21,22 @@ Supply `PHOENIX_API_KEY` through your environment. Set `API_BASE` for a custom O
 ./run.sh --model glm-5.2 --instances /path/to/tasks.jsonl --output runs/glm-repair
 ```
 
-Each completed task writes `PhoenixRepair.patch` under `<output>/<model>/<instance_id>/`. Use `--resume` with the same inputs to continue an interrupted run. The GLM-5.2 and Qwen3.7-Plus generation profiles disable thinking and use a 32,768-token output limit. Model request defaults live in `phoenix/settings.py` and per-model run budgets in `configs/models/`.
+Each completed task writes `PhoenixRepair.patch` under `<output>/<model>/<instance_id>/`. Use `--resume` with the same inputs to continue an interrupted run. Model request defaults live in `phoenix/settings.py` and per-model run budgets in `configs/models/`.
 
-## Published results for the original method
+## Inference profiles
 
-### Pass@1 on SWE-bench Verified
+Use the profile name with `--model`. The settings below apply to localization, patch generation and candidate comparison. Output limits are per response.
 
-| Method | LLM | Resolved (%) |
-|--------|-----|--------------|
-| Mini-SWE-agent | DeepSeek-V3.2 | 61.0% |
-| Live-SWE-agent | DeepSeek-V3.2 | 63.8% |
-| SWE-Search | DeepSeek-V3.2 | 65.4% |
-| Agentless | DeepSeek-V3.2 | 67.0% |
-| Trae-agent | DeepSeek-V3.2 | 67.8% |
-| SWE-agent | DeepSeek-V3.2 | 69.4% |
-| Moatless-tools | Claude-4-Sonnet | 70.8% |
-| **PhoenixRepair** | **DeepSeek-V3.2** | **74.4%** (+5.0%) |
+| Profile | Thinking | Temperature | Top-p | Context tokens | Output tokens |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `deepseek-v3.1` | Off | 0.6 | 0.95 | 131,072 | API default |
+| `deepseek-v3.2` | Off | 1.0 | 0.95 | 131,072 | API default |
+| `qwen3-coder-plus` | Off | 0.7 | 0.80 | 1,000,000 | 65,536 |
+| `glm-4.7` | On | 0.7 | 1.00 | 202,752 | 131,072 |
+| `minimax-m2.5` | On (native) | 1.0 | 0.95 | 204,800 | 32,768 |
+| `glm-5.2` | Off | 1.0 | 1.00 | 1,048,576 | 131,072 |
+| `qwen3.7-plus` | Off | 1.0 | 0.95 | 1,000,000 | 131,072 |
+| `qwen3.7-plus-thinking` | On | 1.0 | 0.95 | 1,000,000 | 131,072 |
+| `qwen-3.8-max` | Off | 1.0 | 0.95 | 1,000,000 | 131,072 |
 
-### Fault Localization Accuracy
-
-| Method | LLM | File Acc@1 | Module Acc@1 | Function Acc@1 |
-|--------|-----|------------|--------------|----------------|
-| SWE-agent | DeepSeek-V3.2 | 83.04% | 74.22% | 63.42% |
-| **PhoenixRepair** | **DeepSeek-V3.2** | **85.64%** (+2.60%) | **76.82%** (+2.60%) | **66.64%** (+3.22%) |
+Both DeepSeek profiles send `deepseek-chat` and omit the output-length parameter. To reproduce V3.1 (2025-08-21) or V3.2 (2025-12-01), set `API_BASE` to a deployment serving that release. The shared API identifier alone cannot pin a snapshot. Both Qwen-3.7 Plus profiles send `qwen3.7-plus` with the selected thinking flag.

@@ -1,13 +1,9 @@
-# Current GLM PhoenixRepair: complete localization -> 200 shared generation calls, 32K output.
 model: glm-5.2
 instances: null
 runtime: null
 output: runs/glm-5.2-repair
 concurrency: 4
 max_steps: 200
-max_input_tokens: 131072
-context_compaction_threshold: 120000
-context_compaction_target: 110000
 localization_max_steps: 150
 localization_timeout: null
 task_timeout: 7200

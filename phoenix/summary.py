@@ -9,7 +9,7 @@ import requests
 
 from phoenix.prompts import PromptBuilder
 from phoenix.repair_guidance import SUMMARY_GUIDANCE
-from phoenix.settings import LEGACY_METHOD, REPAIR_METHODS, PROFILES, write_json
+from phoenix.settings import LEGACY_METHOD, REPAIR_METHODS, PROFILES, inference_fields, write_json
 from phoenix.run_state import bind, read, digest
 
 def sha(path):
@@ -69,12 +69,7 @@ def summarize(task, candidates, settings, directory, key, *, shared_budget=False
     (directory / "prompt.txt").write_text(prompt)
     write_json(directory / "inputs.json", [{k: v for k, v in row.items() if k != "submission"} for row in inputs])
     kimi = settings["model"] == "kimi-k2.7-code"
-    payload = dict(model=settings["model"], messages=[{"role": "user", "content": prompt}], temperature=0.7,
-                   top_p=1.0, max_tokens=32768 if kimi else 8192, enable_thinking=kimi)
-    if kimi:
-        payload["preserve_thinking"] = True
-    if shared_budget_mode:
-        payload.update(temperature=0.0, max_tokens=PROFILES[settings["model"]]["max_tokens"])
+    payload = dict(inference_fields(settings["model"]), messages=[{"role": "user", "content": prompt}])
     timeout = (30, PROFILES[settings["model"]]["timeout"]) if shared_budget_mode else (240 if kimi else 120)
     bind(directory / "identity.json", {"payload": payload, "api_base": settings["api_base"],
                                       "shared_budget": shared_budget})

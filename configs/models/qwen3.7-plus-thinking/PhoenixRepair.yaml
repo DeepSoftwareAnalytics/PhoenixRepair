@@ -1,0 +1,2 @@
+model: qwen3.7-plus-thinking
+output: runs/qwen3.7-plus-thinking-repair

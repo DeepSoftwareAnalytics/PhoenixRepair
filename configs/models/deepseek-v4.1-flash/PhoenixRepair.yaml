@@ -1,4 +1,4 @@
-# Same settings as the current GLM 200-call/32K PhoenixRepair experiment; only model/output differ.
+# Historical DeepSeek Flash profile with a 200-call budget and 32K output limit.
 model: deepseek-v4.1-flash
 instances: null
 runtime: null

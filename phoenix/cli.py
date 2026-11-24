@@ -27,7 +27,7 @@ def main(argv=None):
     parser.add_argument("--concurrency", type=int)
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--no-truncation", action="store_true", default=None, help="Keep full context and observations; reject length-truncated responses")
-    parser.add_argument("--max-input-tokens", type=int, help="Generation context limit; historical default 131072")
+    parser.add_argument("--max-input-tokens", type=int, help="Generation context limit (defaults to the model profile)")
     parser.add_argument("--context-compaction-threshold", type=int, help="Generation input threshold; 0 disables compaction")
     parser.add_argument("--context-compaction-target", type=int, help="Target input size after generation context compaction")
     parser.add_argument("--task-timeout", type=int)
@@ -95,6 +95,8 @@ def main(argv=None):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             if args.resume:
                 previous = json.loads((output / "plan.json").read_text())
+                if previous.get("model_profile") != plan["model_profile"]:
+                    raise ValueError("Saved inference profile differs; resume with the original code or start a new run")
                 if previous.get("recovery_format") != 1:
                     raise ValueError("This run predates durable recovery; use a new output directory")
                 if previous["settings"].get("method") == LEGACY_METHOD:

@@ -339,12 +339,9 @@ def _run_task(instance, source, output, profile, key, config, endpoint):
                     raise RuntimeError('Context budget exceeded after preserving actions/requirements; drafts retained')
             choice = ({'type': 'function', 'function': {'name': 'location_checkpoint'}}
                       if control['checkpoint_required'] else runtime['tool_choice'])
-            payload = dict(model=profile['model'], messages=request_messages,
+            payload = dict(runtime['inference'], messages=request_messages,
                            tools=definitions(config, control['allowed_tools']), tool_choice=choice,
-                           parallel_tool_calls=False, temperature=0.0, top_p=1.0,
-                           max_tokens=runtime['max_tokens'], enable_thinking=runtime['enable_thinking'])
-            if runtime.get('preserve_thinking'):
-                payload['preserve_thinking'] = True
+                           parallel_tool_calls=False)
             if runtime.get('no_truncation') and tokens(request_messages) > runtime['max_compacted_tokens']:
                 raise RuntimeError('NO_TRUNCATION: localization input limit reached; full history retained')
             request_dir = task / 'requests' / f'{step:03d}'
