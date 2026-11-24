@@ -1,0 +1,2 @@
+model: qwen-3.8-max
+output: runs/qwen-3.8-max-repair
