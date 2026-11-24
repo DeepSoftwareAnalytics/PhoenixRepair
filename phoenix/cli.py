@@ -11,12 +11,13 @@ import subprocess
 import sys
 import signal
 
-from phoenix.settings import LEGACY_METHOD, METHOD_NAME, REPAIR_METHODS, ROOT, PROFILES, fingerprint, load_instances, load_settings, write_json
+from phoenix.settings import LEGACY_METHOD, METHOD_NAME, REPAIR_METHODS, SINGLE_METHOD, ROOT, PROFILES, fingerprint, load_instances, load_settings, write_json
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog=METHOD_NAME, description=__doc__)
-    parser.set_defaults(method=METHOD_NAME)
+    parser.add_argument("--single-trajectory", dest="method", action="store_const", const=SINGLE_METHOD,
+                        default=METHOD_NAME, help="Run one SWE-agent trajectory per task")
     parser.add_argument("--config", type=Path)
     parser.add_argument("--model", choices=tuple(PROFILES))
     parser.add_argument("--instances", type=Path, help="JSON array or JSONL task manifest")
@@ -44,7 +45,13 @@ def main(argv=None):
                         help="Validate configuration and task inputs; no model or Docker calls")
     args = parser.parse_args(argv)
     try:
-        settings = load_settings(args.method, args.config or ROOT / "configs/models" / (args.model or "glm-5.2") / "PhoenixRepair.yaml", {
+        config = args.config
+        if config is None:
+            if args.method == SINGLE_METHOD:
+                config = ROOT / "configs/swe-agent.yaml"
+            else:
+                config = ROOT / "configs/models" / (args.model or "glm-5.2") / "PhoenixRepair.yaml"
+        settings = load_settings(args.method, config, {
             k: getattr(args, k) for k in ("model", "instances", "output", "runtime", "api_base", "concurrency",
                                          "max_steps", "task_timeout", "localization_max_steps", "localization_timeout",
                                          "docker_host", "locations", "stage", "adaptive_io", "io_device",
@@ -99,7 +106,7 @@ def main(argv=None):
                     raise ValueError("Saved inference profile differs; resume with the original code or start a new run")
                 if previous.get("recovery_format") != 1:
                     raise ValueError("This run predates durable recovery; use a new output directory")
-                if previous["settings"].get("method") == LEGACY_METHOD:
+                if args.method == METHOD_NAME and previous["settings"].get("method") == LEGACY_METHOD:
                     settings["method"] = LEGACY_METHOD
                 immutable = ("model", "method", "api_base", "max_steps", "task_timeout", "samples",
                              "localization_max_steps", "localization_timeout", "locations", "stage",

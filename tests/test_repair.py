@@ -177,3 +177,18 @@ def test_complete_localization_to_final_patch(monkeypatch, tmp_path, task, candi
     assert events[len(actions):] == (["generate"] if candidate_count == 1 else ["generate", "generate", "summary", "generate"])
     output = Path(settings["output"]) / model / task["instance_id"]
     assert (output / "PhoenixRepair.patch").read_bytes() == (output / "final.patch").read_bytes()
+
+
+def test_single_trajectory_runs_without_location_or_summary(monkeypatch, task, settings):
+    from phoenix import pipeline
+    from phoenix.settings import SINGLE_METHOD
+    settings.update(method=SINGLE_METHOD, max_steps=10)
+    backend = Backend()
+    monkeypatch.setattr(pipeline, "DockerBackend", lambda *args: backend)
+    report, = pipeline.run([task], settings, "fixture")
+    assert report["status"] == "completed"
+    assert backend.calls == [dict(allowance=10, final_stage=True, candidate=None, summary=None, num_candidates=0)]
+    assert [stage["patch"] for stage in report["stages"]] == [
+        str(Path(report["patch"]).parent / "sample-1/final.patch")]
+    assert Path(report["patch"]).is_file()
+    assert not (Path(settings["output"]) / "localization").exists()

@@ -8,7 +8,7 @@ from pathlib import Path
 import threading
 import time
 
-from phoenix.settings import REPAIR_METHODS, localization_config, write_json
+from phoenix.settings import REPAIR_METHODS, SINGLE_METHOD, localization_config, write_json
 from phoenix.summary import summarize
 from phoenix.run_state import bind, digest
 from phoenix.backend import DockerBackend, ControllerInterrupted
@@ -68,7 +68,10 @@ def run_task(task, settings, backend, key, candidates=None, summary_fn=summarize
     directory.mkdir(parents=True, exist_ok=True)
     write_json(directory / "instance.json", task)
     method = settings["method"]
-    jobs = task_jobs(len(candidates or []), settings["max_steps"])
+    if method == SINGLE_METHOD:
+        jobs = [dict(stage="sample-1", kind="sample", final=True, allowance=settings["max_steps"])]
+    else:
+        jobs = task_jobs(len(candidates or []), settings["max_steps"])
     bind(directory / "task-identity.json", dict(task=task, jobs=jobs, candidates=candidates,
                                                model=settings["model"], method=method))
     write_json(directory / "plan.json", jobs)

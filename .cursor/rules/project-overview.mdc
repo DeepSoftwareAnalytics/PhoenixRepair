@@ -5,7 +5,7 @@ alwaysApply: true
 ---
 # PhoenixRepair
 
-Run PhoenixRepair with `./run.sh --model MODEL --instances MANIFEST`.
+Run PhoenixRepair with `./run_our_method.sh --model MODEL --instances MANIFEST`.
 The CLI in `phoenix/cli.py` loads the model configuration. The pipeline in
 `phoenix/pipeline.py` coordinates localization, candidate generation and the
 final patch. The worker uses the agent implementation in `sweagent/agent/`

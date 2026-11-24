@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 API_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 FIELDS = ("instance_id", "problem_statement", "base_commit", "repo_name", "image_name")
 METHOD_NAME = "PhoenixRepair"
+SINGLE_METHOD = "SWE-agent"
 LEGACY_METHOD = "our_method"
 REPAIR_METHODS = (METHOD_NAME, LEGACY_METHOD)
 
@@ -147,7 +148,8 @@ def load_settings(mode, config_path, overrides):
             data[key] = os.environ[env]
     data.setdefault("api_base", API_BASE)
     data["api_base"] = data["api_base"] or API_BASE
-    data.setdefault("output", "runs/" + mode)
+    default_output = f"runs/{data['model']}-single" if mode == SINGLE_METHOD else "runs/" + mode
+    data.setdefault("output", default_output)
     data.setdefault("concurrency", 4)
     data.setdefault("max_steps", 200)
     data.setdefault("localization_max_steps", 150)

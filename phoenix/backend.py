@@ -15,7 +15,7 @@ from phoenix.recovery_profiles import recovery_profile
 from phoenix.run_state import (bind, digest, find_worker, lock, owned_alive,
                                process_identity, read, reserve_retry, retry_reason,
                                stop_owned, verified_result)
-from phoenix.settings import LEGACY_METHOD, REPAIR_METHODS, ROOT, fingerprint, model_config, write_json
+from phoenix.settings import LEGACY_METHOD, REPAIR_METHODS, SINGLE_METHOD, ROOT, fingerprint, model_config, write_json
 
 
 class ControllerInterrupted(Exception):
@@ -39,7 +39,7 @@ class DockerBackend:
         self.output = Path(settings["output"])
         self.output.mkdir(parents=True, exist_ok=True)
         self.base = prepare_tools(self.output)["agent"]
-        if settings["method"] == LEGACY_METHOD:
+        if settings["method"] in (LEGACY_METHOD, SINGLE_METHOD):
             templates = self.base["templates"]
             templates["system_template"] = templates["system_template"].removeprefix("You are PhoenixRepair.\n")
         self.profile = recovery_profile(settings)
@@ -270,6 +270,9 @@ class DockerBackend:
                     now = time.time()
                     history_path = (state.get("recovery") or {}).get("trajectory")
                     offset = state["steps"] - (len(read(history_path).get("trajectory", [])) if history_path else 0)
+                    reserve = 0
+                    if self.settings["method"] == SINGLE_METHOD and self.settings["model"] != "kimi-k2.7-code":
+                        reserve = min(60, remaining / 2)
                     request = dict(task=task, settings=self.settings, stage_dir=str(attempt), base_agent=self.base,
                         run_id=self.run_id, job_id=fingerprint([str(stage), state["attempts"]])[:24],
                         port=self.allocate_port(), image_id=image_id, candidate=candidate, summary=summary,
@@ -277,8 +280,8 @@ class DockerBackend:
                         prior_calls=state["calls"], prior_steps=state["steps"], recovery=state.get("recovery"),
                         prior_execution_seconds=state.get("execution_seconds", 0),
                         steps_offset=max(0, offset),
-                        managed_recovery=True, started_at=now, deadline=now + remaining,
-                        capture_reserve=60)
+                        managed_recovery=True, started_at=now, deadline=now + remaining - reserve,
+                        capture_reserve=reserve or 60)
                     if (attempt / "request.json").exists():
                         self.ports.discard(request["port"])
                         request = read(attempt / "request.json")
