@@ -1,7 +1,8 @@
 import asyncio
 import logging
 import shlex
-from pathlib import PurePath
+from pathlib import PurePath, Path
+import uuid
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -42,6 +43,8 @@ class EnvironmentConfig(BaseModel):
     NOTE: The timeout applies to every command in `post_startup_commands` separately.
     """
 
+    repository_setup_timeout: int = Field(default=480, ge=1)
+
     # pydantic config
     model_config = ConfigDict(extra="forbid")
 
@@ -56,6 +59,7 @@ class SWEEnv:
         repo: Repo | RepoConfig | None,
         post_startup_commands: list[str],
         post_startup_command_timeout: int = 500,
+        repository_setup_timeout: int = 480,
         hooks: list[EnvHook] | None = None,
         name: str = "main",
     ):
@@ -74,6 +78,8 @@ class SWEEnv:
         self.repo = repo
         self._post_startup_commands = post_startup_commands
         self.post_startup_command_timeout = post_startup_command_timeout
+        self.repository_setup_timeout = repository_setup_timeout
+        self._session_name = 'default'
         self.logger = get_logger("swea-env", emoji="🪴")
         self.name = name
         self.clean_multi_line_functions = lambda x: x
@@ -89,11 +95,17 @@ class SWEEnv:
         """
         # Always copy config to avoid shared state between different instances
         config = config.model_copy(deep=True)
+        if isinstance(config.deployment, DockerDeploymentConfig):
+            from sweagent.environment.reliable_docker import ReliableDockerDeployment
+            deployment = ReliableDockerDeployment.from_config(config.deployment)
+        else:
+            deployment = get_deployment(config.deployment)
         return cls(
-            deployment=get_deployment(config.deployment),
+            deployment=deployment,
             repo=config.repo,
             post_startup_commands=config.post_startup_commands,
             post_startup_command_timeout=config.post_startup_command_timeout,
+            repository_setup_timeout=config.repository_setup_timeout,
             name=config.name,
         )
 
@@ -162,7 +174,7 @@ class SWEEnv:
                 check="raise",
                 error_msg="Failed to clean repository",
                 # Sometimes this is slow because it rebuilds some index
-                timeout=120,
+                timeout=self.repository_setup_timeout,
             )
 
     def close(self) -> None:
@@ -180,6 +192,7 @@ class SWEEnv:
         If cached_image is provided, it will use that image name instead of the default.
         """
         self._chook.on_start_deployment()
+        self._session_name = 'default'
         asyncio.run(self.deployment.start())
         asyncio.run(
             self.deployment.runtime.create_session(
@@ -191,7 +204,37 @@ class SWEEnv:
 
     def interrupt_session(self):
         self.logger.info("Interrupting session")
-        asyncio.run(self.deployment.runtime.run_in_session(BashInterruptAction()))
+        asyncio.run(self.deployment.runtime.run_in_session(
+            BashInterruptAction(session=self._session_name, timeout=2, n_retry=3)))
+
+    def prepare_timeout_recovery(self):
+        """Checkpoint shell state, without exposing it to the model or resetting files."""
+        self.communicate("printf '%s\\n' \"$$\" > /root/.phoenix-shell-pid; "
+                         "pwd -P > /root/.phoenix-shell-cwd; "
+                         "export -p > /root/.phoenix-shell-exports", check='raise')
+
+    def recover_timed_out_session(self, *, force_restart=False):
+        if not force_restart:
+            try:
+                self.interrupt_session()
+                return 'The timed-out command was interrupted; the shell is ready.'
+            except Exception as exc:
+                self.logger.warning('[终端恢复] Interrupt failed; rebuilding shell: %s', exc)
+        from sweagent.environment import timeout_recovery
+        script = Path(timeout_recovery.__file__).read_text()
+        # The remote execute endpoint is independent of the broken shell.
+        asyncio.run(self.deployment.runtime.execute(RexCommand(
+            command=['python3', '-c', script, '/root/.phoenix-shell-pid'],
+            check=True, timeout=15)))
+        self._session_name = 'recovered-' + uuid.uuid4().hex[:12]
+        asyncio.run(self.deployment.runtime.create_session(CreateBashSessionRequest(
+            session=self._session_name, startup_source=['/root/.bashrc'], startup_timeout=30)))
+        self.communicate('source /root/.phoenix-shell-exports; '
+                         'cd "$(cat /root/.phoenix-shell-cwd)"', check='raise')
+        self.logger.warning('[终端恢复] New shell ready; repository changes preserved')
+        return ('The timed-out shell and its child processes were terminated. A new shell is ready. '
+                'Files, exported environment variables and the working directory were preserved. '
+                'Non-exported shell variables, functions and activated shell state may need reinitializing.')
 
     # todo: return exit code?
     def communicate(
@@ -218,9 +261,12 @@ class SWEEnv:
         self.logger.log(logging.TRACE, "Input:\n%s", input)  # type: ignore
         rex_check = "silent" if check else "ignore"
         r = asyncio.run(
-            self.deployment.runtime.run_in_session(BashAction(command=input, timeout=timeout, check=rex_check))
+            self.deployment.runtime.run_in_session(BashAction(
+                command=input, timeout=timeout, check=rex_check, session=self._session_name))
         )
         output = r.output
+        # Available to opt-in evidence hooks before a later state query replaces it.
+        self.last_command_result = {'command': input, 'exit_code': r.exit_code}
         self.logger.log(logging.TRACE, "Output:\n%s", output)  # type: ignore
         if check != "ignore" and r.exit_code != 0:
             self.logger.error(f"{error_msg}:\n{output}")

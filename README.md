@@ -1,15 +1,29 @@
-# 🐦‍🔥 PhoenixRepair: Rising from Multi-Location Sampling and Iterative Self-Reflection
+# PhoenixRepair
 
-> **PhoenixRepair** is a multi-agent framework that systematically explores multiple candidate location sets and performs iterative reflection and refinement on patch generation, thereby expanding the search space of repair strategies for automated issue resolution.
+PhoenixRepair localizes an issue into one or more complete repair plans. With one plan, the author generates the final patch directly. With several plans, candidate authors share half the generation budget. One same-model summary guides a fresh author using the remaining calls. Localization has its own budget.
 
-## 🔥 Highlights
+## Run PhoenixRepair
 
-- **State-of-the-art Performance**: Achieves **74.4% pass@1** on SWE-bench Verified with DeepSeek-V3.2
-- **Superior Fault Localization**: Demonstrates higher fault localization accuracy across file, module, and function granularities
-- **Model-Agnostic**: Consistent performance gains across different LLMs (DeepSeek-V3.1, DeepSeek-V3.2, Qwen-Coder-Plus)
-- **Generalizable Framework**: Successfully transfers to other agent-based methods (Mini-SWE-agent, Live-SWE-agent)
+From the repository root, prepare a dedicated Python 3.11+ environment on Linux x86-64 with Docker and the task images available.
 
-## 📊 Performance
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[runtime]'
+python -m phoenix.runtime prepare --output "$PWD/.runtime"
+export PHOENIX_RUNTIME="$PWD/.runtime"
+```
+
+Supply `PHOENIX_API_KEY` through your environment. Set `API_BASE` for a custom OpenAI-compatible endpoint. Provide a JSON or JSONL task manifest with a string value for each of `instance_id`, `problem_statement`, `base_commit`, `repo_name`, and `image_name`.
+
+```bash
+./run.sh --model glm-5.2 --instances /path/to/tasks.jsonl --dry-run
+./run.sh --model glm-5.2 --instances /path/to/tasks.jsonl --output runs/glm-repair
+```
+
+Each completed task writes `PhoenixRepair.patch` under `<output>/<model>/<instance_id>/`. Use `--resume` with the same inputs to continue an interrupted run. The GLM-5.2 and Qwen3.7-Plus generation profiles disable thinking and use a 32,768-token output limit. Model request defaults live in `phoenix/settings.py` and per-model run budgets in `configs/models/`.
+
+## Published results for the original method
 
 ### Pass@1 on SWE-bench Verified
 
@@ -30,109 +44,3 @@
 |--------|-----|------------|--------------|----------------|
 | SWE-agent | DeepSeek-V3.2 | 83.04% | 74.22% | 63.42% |
 | **PhoenixRepair** | **DeepSeek-V3.2** | **85.64%** (+2.60%) | **76.82%** (+2.60%) | **66.64%** (+3.22%) |
-
-## 🏗️ Architecture
-
-PhoenixRepair comprises three main phases:
-
-### 1️⃣ Multi-Location Sets Sampling
-
-- **Localization Sampling Agent**: Iteratively samples N diverse location sets
-- **Graph-based Localization** (for difficult tasks): Provides cross-file dependency information
-- **Deduplication**: Removes duplicate location sets to obtain final candidates
-
-### 2️⃣ Iterative Reflection & Refinement
-
-- **Coder Agent**: Generates patches constrained to specific location sets
-- **Analysis & Test Agent**: Evaluates patch quality through:
-  - Test quality assessment
-  - Regression test pass rate
-- **Selector Agent**: Selects top-performing patches
-- **Analysis Agent**: Distills guidance from historical attempts
-- **Iterative Refinement**: Continues until converging to final location set
-
-### 3️⃣ Final Round Generation
-
-- Analysis agent distills insights from all historical attempts
-- Generates final patch guided by comprehensive distilled knowledge
-
-
-## 🚀 Quick Start
-
-### Installation
-Run
-```bash
-conda create --name phoenix python=3.11
-conda activate phoenix
-python -m pip install --upgrade pip && pip install --editable .
-```
-at the repository root
-
-### Configuration
-
-```bash
-# Set up your API keys
-export OPENAI_API_KEY="your-api-key"
-export DEEPSEEK_API_KEY="your-deepseek-key"
-```
-
-### Running PhoenixRepair
-
-#### Phase 1: Multi-Location Sets Sampling
-We design a tool at `PhoenixRepair/tools/analysis_complete/` to verify whether each task has been completed successfully.
-```bash
-sweagent run-locate \
-    --config config/locate.yaml \
-    --agent.model.name "" \  # Please enter the model name, for example "deepseek-chat"
-    --agent.model.api_base "" \  # Please enter the url, for example "https://api.deepseek.com/v1"
-    --agent.model.per_instance_cost_limit 3.00 \
-    --instances.type swe_bench \
-    --instances.subset verified \
-    --instances.split test \
-    --enable_multi_sampling=True \
-    --specific_instance_ids="" \  # Specify the instance IDs to be executed
-    --num_samples=5 \   # The Number of sequential samples per task
-    --num_workers=25 \  # The number of tasks executed in parallel
-    --enable_best_sample_selection=False \
-    --comparison_model_name="" \  # Please enter the model name, for example "deepseek-chat"
-    --comparison_api_key="" \  # Please enter the api_key
-    --comparison_api_base="" \  # Please enter the url, for example "https://api.deepseek.com/v1"
-```
-
-#### Phase 2: Iterative Reflection & Refinement
-
-```bash
-sweagent run-batch \
-    --config config/default.yaml \ 
-    --agent.model.name "" \   # Please enter the model name, for example "deepseek-chat"
-    --agent.model.api_base "" \  # Please enter the url, for example "https://api.deepseek.com/v1"
-    --agent.model.per_instance_cost_limit 3.00 \
-    --instances.type swe_bench \
-    --instances.subset verified \
-    --instances.split test \
-    --enable_multi_sampling=True \
-    --specific_instance_ids="" \  # Specify the instance IDs to be executed
-    --num_samples=3 \
-    --comparison_model_name="" \  # Please enter the model name, for example "deepseek-chat"
-    --comparison_api_key="" \   # Please enter the api_key
-    --comparison_api_base="" \  # Please enter the url, for example "https://api.deepseek.com/v1"
-    --deduplicated_patches_root ""  # Please enter the absolute path obtained in Phase 1， for example "/home/PhoenixPepair/trajectories/root/locate__openai--GLM-4.7__t-0.70__p-1.00__c-0.00___swe_bench_verified_test"
-```
-#### Phase 3: Evaluation
-```bash
-git clone https://github.com/SWE-bench/SWE-bench.git
-python tackle_pred.py
-python evaluation/run_evaluation.py \
-    --results_dir "" \  # Please Enter The absolute path obtained in Phase 2, for example "/home/PhoenixPepair/trajectories/root/default__openai--GLM-4.7__t-0.70__p-1.00__c-0.00___swe_bench_verified_test"
-```
-
-
-
-
-
-
-
-
-
-
-

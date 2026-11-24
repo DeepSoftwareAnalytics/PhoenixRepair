@@ -30,7 +30,9 @@ class Repo(Protocol):
 
 def _get_git_reset_commands(base_commit: str) -> list[str]:
     return [
-        "git fetch",
+        # Benchmark images already contain their pinned commit. Fetch only when
+        # needed, rather than contacting the remote on every sample reset.
+        f"(git cat-file -e {shlex.quote(base_commit + '^{commit}')} 2>/dev/null || git fetch)",
         "git status",
         "git restore .",
         "git reset --hard",

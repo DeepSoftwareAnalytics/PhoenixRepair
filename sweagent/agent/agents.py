@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import logging
+import shlex
 import time
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal
@@ -21,6 +23,7 @@ from sweagent import __version__, get_agent_commit_hash, get_rex_commit_hash, ge
 from sweagent.agent.action_sampler import AbstractActionSampler, ActionSamplerConfig
 from sweagent.agent.history_processors import DefaultHistoryProcessor, HistoryProcessor
 from sweagent.agent.hooks.abstract import AbstractAgentHook, CombinedAgentHook
+from sweagent.agent.localization_workflow import LocalizationWorkflow, MARKER
 from sweagent.agent.models import (
     AbstractModel,
     HumanModel,
@@ -43,6 +46,8 @@ from sweagent.exceptions import (
     ContextWindowExceededError,
     CostLimitExceededError,
     FormatError,
+    FunctionCallingFormatError,
+    ModelAPIError,
     TotalCostLimitExceededError,
 )
 from sweagent.tools.parsing import (
@@ -160,6 +165,12 @@ class DefaultAgentConfig(BaseModel):
     formatting error, a blocked action, or a bash syntax error.
     """
     action_sampler: ActionSamplerConfig | None = None
+    max_steps: int = Field(default=0, ge=0, description="Maximum trajectory steps per attempt; 0 disables the limit.")
+    limit_submission_mode: Literal['repository_submit_force', 'official_v2_staged_diff'] = 'repository_submit_force'
+    action_repeat_limit: int = Field(default=0, ge=0, description="Stop after this many consecutive identical actions; 0 disables.")
+    localization_workflow: bool = False
+    localization_independent_hypotheses: bool = False
+    localization_complete_strategies: bool = False
 
     type: Literal["default"] = "default"
 
@@ -449,6 +460,12 @@ class DefaultAgent(AbstractAgent):
         history_processors: list[HistoryProcessor],
         model: AbstractModel,
         max_requeries: int = 3,
+        max_steps: int = 0,
+        limit_submission_mode: str = 'repository_submit_force',
+        action_repeat_limit: int = 0,
+        localization_workflow: bool = False,
+        localization_independent_hypotheses: bool = False,
+        localization_complete_strategies: bool = False,
         name: str = "main",
         _catch_errors: bool = True,
         _always_require_zero_exit_code: bool = False,
@@ -470,6 +487,17 @@ class DefaultAgent(AbstractAgent):
             self.tools.config.parse_function = ActionOnlyParser()
         self.history_processors = history_processors
         self.max_requeries = max_requeries
+        self.max_steps = max_steps
+        self.limit_submission_mode = limit_submission_mode
+        self.action_repeat_limit = action_repeat_limit
+        self.localization_workflow_enabled = localization_workflow
+        self.localization_independent_hypotheses = localization_independent_hypotheses
+        self.localization_complete_strategies = localization_complete_strategies
+        if localization_complete_strategies and not localization_workflow:
+            raise ValueError('Complete strategies require localization_workflow')
+        self.localization_controller = LocalizationWorkflow(independent_hypotheses=localization_independent_hypotheses, complete_strategies=localization_complete_strategies) if localization_workflow else None
+        self._last_action = None
+        self._action_repeat_count = 0
         self.logger = get_logger("swea-agent", emoji="🤠")
         # Set in run method
         self._env: SWEEnv | None = None
@@ -510,6 +538,12 @@ class DefaultAgent(AbstractAgent):
             history_processors=config.history_processors,
             model=model,
             max_requeries=config.max_requeries,
+            max_steps=config.max_steps,
+            limit_submission_mode=config.limit_submission_mode,
+            action_repeat_limit=config.action_repeat_limit,
+            localization_workflow=config.localization_workflow,
+            localization_independent_hypotheses=config.localization_independent_hypotheses,
+            localization_complete_strategies=config.localization_complete_strategies,
             action_sampler_config=config.action_sampler,
         )
 
@@ -581,8 +615,17 @@ class DefaultAgent(AbstractAgent):
                     problem_statement.disable_image_processing = True
 
         self._problem_statement = problem_statement
+        if self.localization_workflow_enabled:
+            self.localization_controller = LocalizationWorkflow(independent_hypotheses=self.localization_independent_hypotheses, complete_strategies=self.localization_complete_strategies)
+        self._last_action = None
+        self._action_repeat_count = 0
+        self._step_limit_submission = None
         self._env = env
         iid = self._problem_statement.id
+        self.model.api_usage_context = {
+            'task_id': iid,
+            'stage': 'locate' if self.localization_workflow_enabled or 'locate' in output_dir.parts else 'generate',
+        }
         self.logger.info("Setting up agent for instance %s", iid)
 
         # Save/reset some attributes
@@ -706,7 +749,7 @@ class DefaultAgent(AbstractAgent):
             "message_type": "observation",
         }
         if tool_call_ids:
-            assert len(tool_call_ids) == 1, "This should be ensured by the FunctionCalling parse method"
+            assert len(tool_call_ids) == 1, "Each observation must answer exactly one tool call"
             history_item["role"] = "tool"
             history_item["tool_call_ids"] = tool_call_ids
         self._append_history(history_item)
@@ -723,26 +766,37 @@ class DefaultAgent(AbstractAgent):
                 "tool_calls": step.tool_calls,
                 "message_type": "action",
                 "thinking_blocks": step.thinking_blocks,
+                "reasoning_content": step.reasoning_content,
             },
         )
 
+        results = step.extra_info.get("tool_results")
+        if results:
+            for result in results:
+                self._add_observation_to_history(
+                    result["observation"], [result["tool_call_id"]], result["state"]
+                )
+        else:
+            self._add_observation_to_history(step.observation, step.tool_call_ids, step.state)
+
+    def _add_observation_to_history(self, observation: str, tool_call_ids: list[str] | None, state: dict) -> None:
         elided_chars = 0
-        if step.observation.strip() == "":
+        if observation.strip() == "":
             # Show no output template if observation content was empty
             templates = [self.templates.next_step_no_output_template]
-        elif len(step.observation) > self.templates.max_observation_length:
+        elif self.templates.max_observation_length > 0 and len(observation) > self.templates.max_observation_length:
             templates = [self.templates.next_step_truncated_observation_template]
-            elided_chars = len(step.observation) - self.templates.max_observation_length
+            elided_chars = len(observation) - self.templates.max_observation_length
         else:
             # Show standard output template if there is observation content
             templates = [self.templates.next_step_template]
         self._add_templated_messages_to_history(
             templates,
-            observation=step.observation,
+            observation=observation,
             elided_chars=elided_chars,
             max_observation_length=self.templates.max_observation_length,
-            tool_call_ids=step.tool_call_ids,
-            **step.state,
+            tool_call_ids=tool_call_ids,
+            **state,
         )
 
     def add_instance_template_to_history(self, state: dict[str, str]) -> None:
@@ -819,6 +873,33 @@ class DefaultAgent(AbstractAgent):
             {"role": "assistant", "content": output, "agent": self.name, "message_type": "assistant"},
             {"role": "user", "content": error_template, "agent": self.name, "message_type": "user"},
         ]
+
+    def interrupt_after_api_error(self, error: ModelAPIError) -> StepOutput:
+        """Save unfinished work without invoking submission/review hooks."""
+        from sweagent.agent.api_errors import interrupted_patch_command
+
+        details = dict(error.details)
+        self.logger.warning("%s; preserving generation checkpoint without submission", error)
+        if self.traj_path is not None:
+            try:
+                assert self._env is not None and self._env.repo is not None
+                patch = self._env.communicate(
+                    interrupted_patch_command("/" + self._env.repo.repo_name), check="raise", timeout=60,
+                )
+                path = self.traj_path.with_name("api-interrupted.patch")
+                temporary = path.with_suffix(".patch.tmp")
+                temporary.write_text(patch)
+                temporary.replace(path)
+                details["patch_sha256"] = hashlib.sha256(patch.encode()).hexdigest()
+            except Exception as capture_error:
+                details["checkpoint_error"] = type(capture_error).__name__
+            path = self.traj_path.with_name("api-interrupted.json")
+            temporary = path.with_suffix(".json.tmp")
+            temporary.write_text(json.dumps(details, indent=2) + "\n")
+            temporary.replace(path)
+        return StepOutput(done=True, exit_status="exit_api", submission=None,
+            thought=str(error), output=str(error),
+            extra_info={"generation_interrupted": True, "api_error": details})
 
     def attempt_autosubmission_after_error(self, step: StepOutput) -> StepOutput:
         """For most exceptions, we attempt to still extract the patch and submit that.
@@ -943,7 +1024,21 @@ class DefaultAgent(AbstractAgent):
         Returns:
             action_execution_output: action execution output
         """
-        if self.tools.should_block_action(step.action):
+        controller = getattr(self, 'localization_controller', None)
+        if controller is not None:
+            control = controller.control(len(self.trajectory) + 1, self.max_steps)
+            parts = shlex.split(step.action)
+            name = parts[0] if parts else ''
+            expected_args = 1 if name == 'analysis_complete' else 2
+            if name not in control['allowed_tools'] or len(parts) != expected_args:
+                step.observation = 'Localization controller blocked this action. ' + controller.message(control)
+                step.state = self.tools.get_state(env=self._env)
+                return step
+            # Trusted tools accept data, never shell code. Re-quote the parsed
+            # arguments so model-generated shell operators cannot execute.
+            step.action = shlex.join(parts)
+            self._env.write_file('/root/location_control.json', json.dumps(control))
+        if controller is None and self.tools.should_block_action(step.action):
             raise _BlockedActionError()
 
         if step.action.strip() == "exit":
@@ -959,22 +1054,26 @@ class DefaultAgent(AbstractAgent):
         self._chook.on_action_started(step=step)
         execution_t0 = time.perf_counter()
         run_action: str = self.tools.guard_multiline_input(step.action).strip()
+        execution_timeout = self.tools.execution_timeout_for(run_action)
+        step.extra_info["execution_timeout"] = execution_timeout
+        if hasattr(self._env, 'prepare_timeout_recovery'):
+            self._env.prepare_timeout_recovery()
         try:
             step.observation = self._env.communicate(
                 input=run_action,
-                timeout=self.tools.config.execution_timeout,
+                timeout=execution_timeout,
                 check="raise" if self._always_require_zero_exit_code else "ignore",
             )
         except CommandTimeoutError:
             self._n_consecutive_timeouts += 1
-            if self._n_consecutive_timeouts >= self.tools.config.max_consecutive_execution_timeouts:
+            if 0 < self.tools.config.max_consecutive_execution_timeouts <= self._n_consecutive_timeouts:
                 msg = "Exiting agent due to too many consecutive execution timeouts"
                 self.logger.critical(msg)
                 step.execution_time = time.perf_counter() - execution_t0
                 self._total_execution_time += step.execution_time
                 raise
             try:
-                self._env.interrupt_session()
+                recovery = self._env.recover_timed_out_session()
             except Exception as f:
                 self.logger.exception("Failed to interrupt session after command timeout: %s", f, exc_info=True)
                 step.execution_time = time.perf_counter() - execution_t0
@@ -982,15 +1081,65 @@ class DefaultAgent(AbstractAgent):
                 raise
             step.observation = Template(self.templates.command_cancelled_timeout_template).render(
                 **self._get_format_dict(),
-                timeout=self.tools.config.execution_timeout,
+                timeout=execution_timeout,
                 command=run_action,
             )
+            step.observation += ('\n' + recovery + '\n'
+                f'This command exceeded the {execution_timeout}-second framework limit. '
+                'Choose a different or narrower command using the result so far; '
+                'do not repeat the same timed-out command unchanged. '
+                'An inner shell timeout does not extend the framework limit.')
+            step.extra_info['command_timed_out'] = True
+            if run_action in ('submit', 'submit -f'):
+                self._submission_timeouts = getattr(self, '_submission_timeouts', 0) + 1
+                if self._submission_timeouts >= 2:
+                    step.extra_info['submission_infrastructure_timeout'] = True
+            self.logger.warning('[命令超时反馈] Returned timeout and recovery information to the model')
         else:
             self._n_consecutive_timeouts = 0
         step.execution_time = time.perf_counter() - execution_t0
         self._total_execution_time += step.execution_time
         self._chook.on_action_executed(step=step)
         step.state = self.tools.get_state(env=self._env)
+        recovery_note = getattr(self.tools, 'state_recovery_note', '')
+        if recovery_note:
+            step.observation += '\n[Environment recovery] ' + recovery_note
+            step.extra_info['state_query_recovered'] = True
+            self.logger.warning('[状态查询反馈] Returned shell recovery details to the model')
+
+        if controller is not None:
+            controller.observe(name, step.observation, len(self.trajectory) + 1)
+            step.extra_info['localization_control'] = control
+            if name == 'location_abort' and any(
+                line.startswith(MARKER) and json.loads(line[len(MARKER):]).get('aborted')
+                for line in step.observation.splitlines()
+            ):
+                step.done = True
+                step.exit_status = 'exit_localization_no_candidate'
+                step.submission = None
+                return step
+
+        action = step.action.strip()
+        if action in ('submit', 'submit -f') and '[SUBMISSION_INFRASTRUCTURE_TIMEOUT]' in step.observation:
+            self._submission_timeouts = getattr(self, '_submission_timeouts', 0) + 1
+            step.extra_info['submission_infrastructure_timeout'] = self._submission_timeouts >= 2
+        if step.extra_info.get('submission_infrastructure_timeout'):
+            step.done = True
+            step.exit_status = 'exit_submission_timeout'
+            step.submission = None
+            return step
+        self._action_repeat_count = self._action_repeat_count + 1 if action == self._last_action else 1
+        self._last_action = action
+        if action and 0 < self.action_repeat_limit <= self._action_repeat_count:
+            step = self.handle_submission(step)
+            if step.done:
+                return step
+            step.done = True
+            step.exit_status = "exit_action_loop"
+            step.submission = None
+            step.extra_info["action_repeat_count"] = self._action_repeat_count
+            self.logger.warning("[循环终止] 连续 %d 次相同 action，终止当前轨迹", self._action_repeat_count)
+            return step
 
         if RETRY_WITH_OUTPUT_TOKEN in step.observation:
             step.observation = step.observation.replace(RETRY_WITH_OUTPUT_TOKEN, "")
@@ -1002,6 +1151,57 @@ class DefaultAgent(AbstractAgent):
             raise _ExitForfeit()
 
         return self.handle_submission(step)
+
+    def handle_actions(self, step: StepOutput, actions: list[str]) -> StepOutput:
+        """Execute calls in order, retaining a separate result for every call ID.
+
+        A multi-call response is one model step. Parse/blocklist validation happens
+        before execution; a runtime retry stops the remaining calls and returns
+        their status to the model without replaying already executed actions.
+        """
+        if len(actions) == 1:
+            return self.handle_action(step)
+        assert step.tool_calls is not None and step.tool_call_ids is not None
+        if getattr(self, 'localization_controller', None) is None and any(self.tools.should_block_action(action) for action in actions):
+            raise _BlockedActionError()
+        results = step.extra_info["tool_results"] = []
+        stop_reason = None
+        for action, call, call_id in zip(actions, step.tool_calls, step.tool_call_ids, strict=True):
+            if stop_reason:
+                results.append({"tool_call_id": call_id, "action": action, "executed": False,
+                                "observation": f"Not executed: {stop_reason}", "state": dict(step.state)})
+                continue
+            if self._total_execution_time > self.tools.config.total_execution_timeout:
+                raise _TotalExecutionTimeExceeded()
+            child = StepOutput(action=action, thought=step.thought, output=step.output,
+                               tool_calls=[call], tool_call_ids=[call_id])
+            executed = True
+            try:
+                child = self.handle_action(child)
+            except (BashIncorrectSyntaxError, _BlockedActionError, _RetryWithOutput, _RetryWithoutOutput) as exc:
+                # Return prior observations as well; requerying the original
+                # history here would hide completed actions and risk replaying edits.
+                stop_reason = "an earlier action requires correction or another model response"
+                if isinstance(exc, BashIncorrectSyntaxError):
+                    executed = False
+                    child.observation = f"Command was not executed because of invalid bash syntax: {exc}"
+                elif isinstance(exc, _BlockedActionError):
+                    executed = False
+                    child.observation = "Command was blocked by the configured action filter."
+                elif not child.observation.strip():
+                    child.observation = "The tool requested another model response."
+                if not child.state:
+                    child.state = self.tools.get_state(env=self._env)
+            step.state = child.state
+            step.execution_time += child.execution_time
+            results.append({"tool_call_id": call_id, "action": action, "executed": executed,
+                            "observation": child.observation, "state": dict(child.state)})
+            if child.done:
+                step.extra_info.update(child.extra_info)
+                step.done, step.exit_status, step.submission = child.done, child.exit_status, child.submission
+                stop_reason = "the agent already submitted or exited"
+        step.observation = "\n\n".join(f"[{r['tool_call_id']}] {r['observation']}" for r in results)
+        return step
 
     def forward(self, history: list[dict[str, str]]) -> StepOutput:
         """Forward the model without handling errors.
@@ -1023,6 +1223,19 @@ class DefaultAgent(AbstractAgent):
         # attributes (e.g., if we want to requery the model for a bash syntax error, we
         # need to have the previous model output to format the requery template)
         step = StepOutput()
+        controller = getattr(self, 'localization_controller', None)
+        if controller is not None:
+            if self.max_steps <= 0:
+                raise ValueError('Localization workflow requires a positive max_steps')
+            control = controller.control(len(self.trajectory) + 1, self.max_steps)
+            history = [*history, {'role': 'user', 'content': controller.message(control), 'agent': self.name}]
+            self.model.active_tool_names = control['allowed_tools']
+            step.extra_info['localization_control'] = control
+            notice = (control['phase'], control['checkpoint_required'])
+            if notice != controller.last_notice:
+                self.logger.info('[定位阶段] step=%s phase=%s checkpoint_required=%s candidates=%s',
+                                 control['step'], *notice, control['candidate_count'])
+                controller.last_notice = notice
         step.query = copy.deepcopy(history)
         try:
             # Forward model and get actions
@@ -1041,15 +1254,24 @@ class DefaultAgent(AbstractAgent):
             else:
                 output = self.model.query(history)  # type: ignore
             step.output = output["message"]
+            step.reasoning_content = output.get('reasoning_content')
+            if step.reasoning_content is not None:
+                step.extra_info['reasoning_content'] = step.reasoning_content
+            if "response_metadata" in output:
+                step.extra_info["response_metadata"] = output["response_metadata"]
             # todo: Can't I override the parser in __init__?
-            step.thought, step.action = self.tools.parse_actions(output)
+            step.thought, actions = self.tools.parse_action_list(output)
+            step.action = "\n".join(actions)
             step.thinking_blocks = output.get("thinking_blocks", [])
             if output.get("tool_calls") is not None:
-                step.tool_call_ids = [call["id"] for call in output["tool_calls"]]
+                ids = [call.get("id") for call in output["tool_calls"]]
+                if any(not isinstance(i, str) or not i for i in ids) or len(set(ids)) != len(ids):
+                    raise FunctionCallingFormatError("Tool calls need distinct non-empty IDs.", "incorrect_args")
+                step.tool_call_ids = ids
                 step.tool_calls = output["tool_calls"]
             self.logger.info(f"💭 THOUGHT\n{step.thought}\n\n🎬 ACTION\n{step.action.strip()}")
             self._chook.on_actions_generated(step=step)
-            return self.handle_action(step)
+            return self.handle_actions(step, actions)
         except Exception as e:
             if step.action == step.thought == "":
                 # Probably the parsing failed/no action included. Let's still fill in thought
@@ -1058,6 +1280,46 @@ class DefaultAgent(AbstractAgent):
             # Attach the step object to the exception
             e.step = step  # type: ignore
             raise
+
+    def _step_limit_reached(self) -> bool:
+        return 0 < self.max_steps <= len(self.trajectory)
+
+    def _stop_at_step_limit(self, step: StepOutput | None = None) -> StepOutput:
+        self.logger.warning("[步数上限] Reached %d steps; submit current patch without another model call", self.max_steps)
+        result = step.model_copy(deep=True) if step is not None else StepOutput()
+        result.done = True
+        result.exit_status = "exit_step_limit"
+        result.extra_info['step_limit'] = self.max_steps
+        result.submission = None
+        # Localization workflows have a different terminal tool and must not
+        # submit a code patch. For repair runs, bypass submit's review stage:
+        # the agent has no remaining model steps to perform that review.
+        if self.tools.config.submit_command != "submit":
+            return result
+        if getattr(self, '_step_limit_submission', None) is not None:
+            return self._step_limit_submission.model_copy(deep=True)
+        try:
+            assert self._env is not None
+            if self.limit_submission_mode == 'official_v2_staged_diff':
+                from sweagent.agent.patch_capture import staged_diff_command
+                repo = '/' + self._env.repo.repo_name if self._env.repo is not None else '/'
+                self._env.communicate(staged_diff_command(repo), check='raise', timeout=60)
+                result = self.handle_submission(result, force_submission=True)
+            else:
+                observation = self._env.communicate(
+                    "rm -f /root/model.patch && submit -f", check="raise", timeout=60,
+                )
+                if not self.tools.check_for_submission_cmd(observation):
+                    raise RuntimeError('submit -f did not return a final submission marker')
+                result = self.handle_submission(result, observation=observation)
+            result.extra_info['limit_submission'] = self.limit_submission_mode
+            if not result.submission:
+                result.extra_info['empty_patch'] = True
+        except Exception as exc:
+            self.logger.exception("Failed to submit patch at step limit")
+            result.extra_info['limit_submission_error'] = str(exc)
+        self._step_limit_submission = result.model_copy(deep=True)
+        return result
 
     def forward_with_handling(self, history: list[dict[str, str]]) -> StepOutput:
         """Forward the model and handle errors, requerying the model if we can.
@@ -1105,6 +1367,10 @@ class DefaultAgent(AbstractAgent):
 
         n_format_fails = 0
         while n_format_fails < self.max_requeries:
+            # Format-error requeries also append trajectory entries. Check here
+            # as well as in step(), so a single outer step cannot exceed the cap.
+            if self._step_limit_reached():
+                return self._stop_at_step_limit()
             try:
                 return self.forward(history)
 
@@ -1166,10 +1432,10 @@ class DefaultAgent(AbstractAgent):
                 )
 
             except CommandTimeoutError:
-                self.logger.exception("Exiting due to multiple consecutive command timeouts", exc_info=True)
+                self.logger.exception("Exiting because a command or state query timed out without successful recovery", exc_info=True)
                 return handle_error_with_autosubmission(
                     "exit_command_timeout",
-                    "Exit due to multiple consecutive command timeouts",
+                    "Exit because command or state-query timeout recovery was unsuccessful",
                 )
 
             except ContextWindowExceededError:
@@ -1184,12 +1450,13 @@ class DefaultAgent(AbstractAgent):
                     "exit_cost",
                     "Exit due to cost limit",
                 )
+            except ModelAPIError as e:
+                return self.interrupt_after_api_error(e)
             except RetryError as e:
-                self.logger.exception(f"Exiting due to retry error: {e}", exc_info=True)
-                return handle_error_with_autosubmission(
-                    "exit_api",
-                    f"Exit due to retry error: {e}",
-                )
+                from sweagent.agent.api_errors import is_retryable_api_error
+                cause = e.last_attempt.exception() or e
+                return self.interrupt_after_api_error(ModelAPIError(cause,
+                    attempts=e.last_attempt.attempt_number, retryable=is_retryable_api_error(cause)))
             except SwerexException as e:
                 self.logger.exception(f"Exiting due to environment error: {e}", exc_info=True)
                 return handle_error_with_autosubmission(
@@ -1247,17 +1514,30 @@ class DefaultAgent(AbstractAgent):
         assert self._env is not None
         self._chook.on_step_start()
 
-        n_step = len(self.trajectory) + 1
-        self.logger.info("=" * 25 + f" STEP {n_step} " + "=" * 25)
-        step_output = self.forward_with_handling(self.messages)
-        self.add_step_to_history(step_output)
+        if self._step_limit_reached():
+            step_output = self._stop_at_step_limit()
+        else:
+            n_step = len(self.trajectory) + 1
+            self.logger.info("=" * 25 + f" STEP {n_step} " + "=" * 25)
+            step_output = self.forward_with_handling(self.messages)
+            if not step_output.done and 0 < self.max_steps <= len(self.trajectory) + 1:
+                step_output = self._stop_at_step_limit(step_output)
+        # No assistant action or tool response was produced by an API failure.
+        # Keep the exact conversation available for a later generation resume.
+        if step_output.exit_status != "exit_api":
+            self.add_step_to_history(step_output)
+        else:
+            self.info["api_error"] = step_output.extra_info["api_error"]
 
         self.info["submission"] = step_output.submission
         self.info["exit_status"] = step_output.exit_status  # type: ignore
         self.info.update(self._get_edited_files_with_context(patch=step_output.submission or ""))  # type: ignore
         self.info["model_stats"] = self.model.stats.model_dump()
 
-        self.add_step_to_trajectory(step_output)
+        # If requeries consumed the last slot, the terminal bookkeeping is not
+        # another model interaction and must not create a synthetic step 201.
+        if not self._step_limit_reached():
+            self.add_step_to_trajectory(step_output)
 
         self._chook.on_step_done(step=step_output, info=self.info)
         return step_output

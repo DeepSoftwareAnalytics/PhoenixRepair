@@ -395,17 +395,23 @@ class FunctionCallingParser(AbstractParseFunction, BaseModel):
     """Type for (de)serialization. Do not change."""
 
     def _parse_tool_call(self, tool_call: dict, commands: list[Command]):
-        name = tool_call["function"]["name"]
+        function = tool_call.get("function") if isinstance(tool_call, dict) else None
+        if not isinstance(function, dict) or not isinstance(function.get("name"), str):
+            raise FunctionCallingFormatError("Tool call must contain a function name and arguments.", "invalid_command")
+        name = function["name"]
         command = {c.name: c for c in commands}.get(name)
         if not command:
             msg = f"Command '{name}' not found in list of available commands."
             raise FunctionCallingFormatError(msg, "invalid_command")
-        if not isinstance(tool_call["function"]["arguments"], dict):
+        values = function.get("arguments")
+        if not isinstance(values, dict):
             try:
-                values = json.loads(tool_call["function"]["arguments"])
-            except json.JSONDecodeError:
+                values = json.loads(values)
+            except (json.JSONDecodeError, TypeError):
                 msg = "Tool call arguments are not valid JSON."
                 raise FunctionCallingFormatError(msg, "invalid_json")
+        if not isinstance(values, dict):
+            raise FunctionCallingFormatError("Tool call arguments must be a JSON object.", "invalid_json")
         required_args = {arg.name for arg in command.arguments if arg.required}
         missing_args = required_args - values.keys()
         if missing_args:
@@ -436,20 +442,17 @@ class FunctionCallingParser(AbstractParseFunction, BaseModel):
         }
         return command.invoke_format.format(**formatted_args).strip()
 
+    def parse_tool_calls(self, model_response: dict, commands: list[Command]) -> list[str]:
+        """Validate the whole response before any of its calls are executed."""
+        tool_calls = model_response.get("tool_calls")
+        if not tool_calls:
+            raise FunctionCallingFormatError("Model response contains no tool calls.", "missing", num_tools=0)
+        if not isinstance(tool_calls, list):
+            raise FunctionCallingFormatError("Tool calls must be a list.", "incorrect_args")
+        return [self._parse_tool_call(call, commands) for call in tool_calls]
+
     def __call__(self, model_response: dict, commands: list[Command], strict=False):
-        message = model_response["message"]
-        tool_calls = model_response.get("tool_calls", None)
-        if tool_calls is None or len(tool_calls) != 1:
-            num_tools = len(tool_calls) if tool_calls else 0
-            msg = (
-                f"Expected exactly one tool call in model response - received {num_tools} "
-                f"tool calls with message: {message}"
-            )
-            error_code = "missing" if num_tools == 0 else "multiple"
-            raise FunctionCallingFormatError(msg, error_code, num_tools=num_tools)
-        tool_call = tool_calls[0]
-        action = self._parse_tool_call(tool_call, commands)
-        return message, action
+        return model_response["message"], "\n".join(self.parse_tool_calls(model_response, commands))
 
 
 class JsonParser(AbstractParseFunction, BaseModel):
