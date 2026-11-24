@@ -15,7 +15,7 @@ import threading
 
 import yaml
 
-from phoenix.p0_guidance import IMPLEMENTATION_GUIDANCE
+from phoenix.repair_guidance import IMPLEMENTATION_GUIDANCE
 from phoenix.prompts import PromptBuilder
 from phoenix.settings import ROOT, model_config, write_json
 from phoenix.run_state import read, digest, process_identity, lock
@@ -52,14 +52,14 @@ def build_config(request):
     data.update(type="default", max_steps=settings["max_steps"], action_repeat_limit=0,
                 limit_submission_mode="official_v2_staged_diff", localization_workflow=False,
                 localization_independent_hypotheses=False, localization_complete_strategies=False)
-    p0 = settings["method"] == "our_method"
-    data["model"] = model_config(settings["model"], settings["api_base"], p0=p0, context_settings=settings)
+    shared_budget_mode = settings["method"] == "our_method"
+    data["model"] = model_config(settings["model"], settings["api_base"], shared_budget_mode=shared_budget_mode, context_settings=settings)
     data["tools"].update(git_execution_timeout=180, max_consecutive_execution_timeouts=0)
     if settings.get("no_truncation"):
         data["templates"]["max_observation_length"] = 0
         data["tools"].setdefault("env_variables", {})["PHOENIX_NO_TRUNCATION"] = "1"
         data["tools"].setdefault("registry_variables", {})["USE_FILEMAP"] = "false"
-    if p0:
+    if shared_budget_mode:
         data["templates"]["instance_template"] += "\n" + IMPLEMENTATION_GUIDANCE
         data["tools"]["total_execution_timeout"] = settings["task_timeout"]
     agent = DefaultAgentConfig.model_validate(data)
@@ -116,8 +116,8 @@ def build_config(request):
     return config, guidance
 
 
-def install_p0_budget(agent, allowance, final_stage, stage=None, initial_calls=0, *, exclude_rate_limits=False):
-    """Retain the historical author allowance and reminders, then stop at P0."""
+def install_generation_budget(agent, allowance, final_stage, stage=None, initial_calls=0, *, exclude_rate_limits=False):
+    """Retain the historical author allowance and reminders, then stop at PhoenixRepair."""
     from sweagent.agent.hooks.abstract import AbstractAgentHook
     from sweagent.exceptions import InstanceCallLimitExceededError
 
@@ -134,7 +134,7 @@ def install_p0_budget(agent, allowance, final_stage, stage=None, initial_calls=0
                     "rate_limit_retries_this_worker": self.rate_limit_retries,
                     "exclude_rate_limit_from_budget": exclude_rate_limits,
                     "generation_allowance": allowance, "review_calls": 0, "repair_calls": 0,
-                    "output_stage": "P0" if final_stage else "candidate"})
+                    "output_stage": "PhoenixRepair" if final_stage else "candidate"})
 
         def on_init(self, *, agent):
             # Retries happen inside query(). Charge each individual attempt,
@@ -144,7 +144,7 @@ def install_p0_budget(agent, allowance, final_stage, stage=None, initial_calls=0
 
             def query(*args, **kwargs):
                 if self.calls >= allowance:
-                    raise InstanceCallLimitExceededError("Initial P0 generation allowance reached; collect the current patch")
+                    raise InstanceCallLimitExceededError("Initial PhoenixRepair generation allowance reached; collect the current patch")
                 self.calls += 1
                 self.request_attempts += 1
                 self.persist()  # Charge before the request, including failed/in-flight calls.
@@ -173,10 +173,10 @@ def install_p0_budget(agent, allowance, final_stage, stage=None, initial_calls=0
                             script = "/root/phoenix_submission_probe.py"
                             env = agent._env
                             env.write_file(script, source.read_text())
-                            env.write_file("/root/phoenix_p0.patch", patch)
+                            env.write_file("/root/phoenixrepair.patch", patch)
 
                             def operation(name):
-                                request = dict(operation=name, root="/" + env.repo.repo_name, patch_path="/root/phoenix_p0.patch")
+                                request = dict(operation=name, root="/" + env.repo.repo_name, patch_path="/root/phoenixrepair.patch")
                                 output = env.communicate(RUNTIME_PYTHON + " " + script + " " + shlex.quote(json.dumps(request)), check="ignore", timeout=120)
                                 return json.loads(output.strip().splitlines()[-1])
                             mechanical = operation("inspect_patch")
@@ -194,8 +194,8 @@ def install_p0_budget(agent, allowance, final_stage, stage=None, initial_calls=0
                                 result.submission = patch
                         except Exception as exc:
                             mechanical = {"valid": False, "validation_error": type(exc).__name__ + ": " + str(exc)[:800]}
-                        (stage / "P0.patch").write_text(patch)
-                        write_json(stage / "P0.json", {"model_calls": self.calls, "mechanical_validation": mechanical,
+                        (stage / "PhoenixRepair.patch").write_text(patch)
+                        write_json(stage / "submission.json", {"model_calls": self.calls, "mechanical_validation": mechanical,
                             "review_calls": 0, "repair_calls": 0, "generation_model_stats": agent.model.stats.model_dump()})
                     return result
                 agent.handle_submission = submit
@@ -205,7 +205,7 @@ def install_p0_budget(agent, allowance, final_stage, stage=None, initial_calls=0
             if self.calls == 0 or remaining in (20, 10, 5, 2, 1):
                 messages.append({"role": "user", "agent": agent, "content":
                     f"This stage allows {allowance} initial generation calls; {remaining} remain. "
-                    + ("This is the final P0 stage; all stated calls are available for generation and checks. " if final_stage else
+                    + ("This is the final PhoenixRepair stage; all stated calls are available for generation and checks. " if final_stage else
                        "This is an intermediate candidate; summary and final generation follow within the shared 200-call budget. ")
                     + "Complete the issue, run focused checks, remove temporary files and submit before this allowance ends."})
     hook = AuthorBudget()
@@ -378,7 +378,7 @@ def execute(request):
     runner.env.start = gated_start
     hook = None
     if request["settings"]["method"] == "our_method":
-        hook = install_p0_budget(runner.agent, request["generation_allowance"], request["final_stage"],
+        hook = install_generation_budget(runner.agent, request["generation_allowance"], request["final_stage"],
                                  stage, request.get("prior_calls", 0),
                                  exclude_rate_limits=request["settings"].get("exclude_rate_limit_from_budget", False))
         hook.persist()
@@ -392,8 +392,8 @@ def execute(request):
             patch = (stage / "replayed.patch").read_text()
             (stage / "submitted.patch").write_text(patch)
             if request["settings"]["method"] == "our_method":
-                (stage / "P0.patch").write_text(patch)
-                write_json(stage / "P0.json", {"model_calls": request.get("prior_calls", 0),
+                (stage / "PhoenixRepair.patch").write_text(patch)
+                write_json(stage / "submission.json", {"model_calls": request.get("prior_calls", 0),
                     "mechanical_validation": replay["mechanical_validation"], "review_calls": 0, "repair_calls": 0})
             write_json(stage / "submission.json", {"patch_sha256": digest(stage / "submitted.patch"),
                 "model_calls": request.get("prior_calls", 0), "exit_status": "submitted (recovered)"})
@@ -408,7 +408,7 @@ def execute(request):
         if hook:
             write_json(stage / "author_budget.json", {"attempted_calls": hook.calls,
                 "generation_allowance": request["generation_allowance"], "review_calls": 0,
-                "repair_calls": 0, "output_stage": "P0" if request["final_stage"] else "candidate"})
+                "repair_calls": 0, "output_stage": "PhoenixRepair" if request["final_stage"] else "candidate"})
         # Keep a failed managed container for stopped-tree capture by its
         # controller; the controller always owns final cleanup.
         if not failed or not request.get("managed_recovery"):

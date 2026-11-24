@@ -1,13 +1,13 @@
 # PhoenixRepair
 
-PhoenixRepair P0 localizes an issue into one or more complete repair plans. With one plan, the author generates the final patch directly. With several plans, candidate authors share half the generation budget. One same-model summary guides a fresh author using the remaining calls. Localization has its own budget.
+PhoenixRepair localizes an issue into one or more complete repair plans. With one plan, the author generates the final patch directly. With several plans, candidate authors share half the generation budget. One same-model summary guides a fresh author using the remaining calls. Localization has its own budget.
 
 ## Run PhoenixRepair
 
 From the repository root, prepare a dedicated Python 3.11+ environment on Linux x86-64 with Docker and the task images available.
 
 ```bash
-cd p0
+cd phoenixrepair
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[runtime]'
@@ -18,11 +18,11 @@ export PHOENIX_RUNTIME="$PWD/.runtime"
 Supply `PHOENIX_API_KEY` through your environment. Set `API_BASE` for a custom OpenAI-compatible endpoint. Provide a JSON or JSONL task manifest with a string value for each of `instance_id`, `problem_statement`, `base_commit`, `repo_name`, and `image_name`.
 
 ```bash
-phoenix-p0 --model glm-5.2 --instances /path/to/tasks.jsonl --dry-run
-phoenix-p0 --model glm-5.2 --instances /path/to/tasks.jsonl --output runs/glm-p0
+phoenixrepair --model glm-5.2 --instances /path/to/tasks.jsonl --dry-run
+phoenixrepair --model glm-5.2 --instances /path/to/tasks.jsonl --output runs/glm-repair
 ```
 
-Each completed task writes `P0.patch` under `<output>/<model>/<instance_id>/`. Use `--resume` with the same inputs to continue an interrupted run. The GLM-5.2 and Qwen3.7-Plus generation profiles disable thinking and use a 32,768-token output limit. Model request defaults live in `p0/phoenix/settings.py` and per-model run budgets in `p0/configs/models/`.
+Each completed task writes `PhoenixRepair.patch` under `<output>/<model>/<instance_id>/`. Use `--resume` with the same inputs to continue an interrupted run. The GLM-5.2 and Qwen3.7-Plus generation profiles disable thinking and use a 32,768-token output limit. Model request defaults live in `phoenixrepair/phoenix/settings.py` and per-model run budgets in `phoenixrepair/configs/models/`.
 
 ## Published results for the original method
 

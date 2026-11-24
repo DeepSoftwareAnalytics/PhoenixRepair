@@ -1,12 +1,14 @@
-# Kimi P0 is a new experiment; no historical P0 score is claimed.
-# The pre-review P0 row: complete localization -> guided author generation.
+# Current GLM PhoenixRepair: complete localization -> 200 shared generation calls, 32K output.
 # No patch review, repair, P1 selection, or benchmark evaluation is run.
-model: kimi-k2.7-code
+model: glm-5.2
 instances: null
 runtime: null
-output: runs/kimi-k2.7-code-p0
+output: runs/glm-5.2-repair
 concurrency: 4
 max_steps: 200
+max_input_tokens: 131072
+context_compaction_threshold: 120000
+context_compaction_target: 110000
 localization_max_steps: 150
 localization_timeout: null
 task_timeout: 7200

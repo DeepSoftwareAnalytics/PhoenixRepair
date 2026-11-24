@@ -1,4 +1,4 @@
-"""Same-model comparison of P0 candidate patches."""
+"""Same-model comparison of PhoenixRepair candidate patches."""
 import hashlib
 from pathlib import Path
 import re
@@ -8,7 +8,7 @@ import os
 import requests
 
 from phoenix.prompts import PromptBuilder
-from phoenix.p0_guidance import SUMMARY_GUIDANCE
+from phoenix.repair_guidance import SUMMARY_GUIDANCE
 from phoenix.settings import PROFILES, write_json
 from phoenix.run_state import bind, read, digest
 
@@ -46,23 +46,23 @@ def patch_for_prompt(path, limit=180_000):
 
 def summarize(task, candidates, settings, directory, key, *, shared_budget=False):
     directory.mkdir(parents=True, exist_ok=True)
-    p0 = settings["method"] == "our_method"
-    if p0 and not shared_budget:
-        raise ValueError("P0 summary must use the shared one-call budget")
+    shared_budget_mode = settings["method"] == "our_method"
+    if shared_budget_mode and not shared_budget:
+        raise ValueError("PhoenixRepair summary must use the shared one-call budget")
     inputs = []
     for index, row in enumerate(candidates, 1):
         patch = Path(row["patch"])
         if not patch.is_file() or not patch.read_text().strip():
             raise ValueError("Summary requires every candidate patch to be present and nonempty")
-        if p0:
+        if shared_budget_mode:
             preview = patch.read_text()
             metadata = dict(original_chars=len(preview), prompt_chars=len(preview), compacted=False)
         else:
             preview, metadata = patch_for_prompt(patch)
         inputs.append(dict(index=index, trajectory=[None] * row["steps"], submission=preview,
-                           exit_status="submitted" if p0 else row["exit_status"], patch_sha256=sha(patch), preview=metadata))
+                           exit_status="submitted" if shared_budget_mode else row["exit_status"], patch_sha256=sha(patch), preview=metadata))
     prompt = PromptBuilder()._build_comparison_prompt(task["problem_statement"], inputs, len(inputs))
-    if p0:
+    if shared_budget_mode:
         prompt += SUMMARY_GUIDANCE
     (directory / "prompt.txt").write_text(prompt)
     write_json(directory / "inputs.json", [{k: v for k, v in row.items() if k != "submission"} for row in inputs])
@@ -71,9 +71,9 @@ def summarize(task, candidates, settings, directory, key, *, shared_budget=False
                    top_p=1.0, max_tokens=32768 if kimi else 8192, enable_thinking=kimi)
     if kimi:
         payload["preserve_thinking"] = True
-    if p0:
+    if shared_budget_mode:
         payload.update(temperature=0.0, max_tokens=PROFILES[settings["model"]]["max_tokens"])
-    timeout = (30, PROFILES[settings["model"]]["timeout"]) if p0 else (240 if kimi else 120)
+    timeout = (30, PROFILES[settings["model"]]["timeout"]) if shared_budget_mode else (240 if kimi else 120)
     bind(directory / "identity.json", {"payload": payload, "api_base": settings["api_base"],
                                       "shared_budget": shared_budget})
     write_json(directory / "request.json", payload)
@@ -88,7 +88,7 @@ def summarize(task, candidates, settings, directory, key, *, shared_budget=False
         return (directory / "summary.txt").read_text()
     if state["phase"] == "failed":
         raise RuntimeError("Summary exhausted its original bounded attempts; no budget reset on resume")
-    exclude_rate_limits = p0 and settings.get("exclude_rate_limit_from_budget", False)
+    exclude_rate_limits = shared_budget_mode and settings.get("exclude_rate_limit_from_budget", False)
     state.setdefault("rate_limit_retries", 0)
     transport_limit = 1 if shared_budget else (3 if kimi else 5)
     format_limit = 1 if shared_budget else 3
@@ -103,7 +103,7 @@ def summarize(task, candidates, settings, directory, key, *, shared_budget=False
 
     def transport_failure():
         if state["transport_attempt"] >= transport_limit:
-            if p0 or kimi:
+            if shared_budget_mode or kimi:
                 state["phase"] = "failed"
             else:
                 state["format_attempt"] += 1
@@ -126,7 +126,7 @@ def summarize(task, candidates, settings, directory, key, *, shared_budget=False
                     transport_failure()
                     continue
             if state["phase"] == "ready":
-                if p0:
+                if shared_budget_mode:
                     from sweagent.agent.request_pacing import wait_for_request
                     account = settings.get("account_id") or os.environ.get("PHOENIX_ACCOUNT_ID") or "env-" + hashlib.sha256(key.encode()).hexdigest()[:16]
                     wait_for_request(account, "openai/" + settings["model"], settings.get("api_request_interval", 2))

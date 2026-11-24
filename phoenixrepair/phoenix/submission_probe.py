@@ -156,7 +156,7 @@ def replay_submission(root, patch_path, clean_tests=True, expected_tree=None):
     else:
         result['mechanical_validation'] = check
     if clean_tests and not result['mechanical_validation']['valid']:
-        raise ValueError('Preserved P0 patch still fails mechanical validation')
+        raise ValueError('Preserved PhoenixRepair patch still fails mechanical validation')
     return result
 
 if __name__ == "__main__":

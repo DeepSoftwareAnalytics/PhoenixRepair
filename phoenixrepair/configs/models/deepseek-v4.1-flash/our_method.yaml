@@ -1,9 +1,9 @@
-# Same settings as the current GLM 200-call/32K P0 experiment; only model/output differ.
+# Same settings as the current GLM 200-call/32K PhoenixRepair experiment; only model/output differ.
 model: deepseek-v4.1-flash
 instances: null
 runtime: null
 api_base: null
-output: runs/deepseek-v4.1-flash-p0-200calls-32k
+output: runs/deepseek-v4.1-flash-repair-200calls-32k
 concurrency: 4
 max_steps: 200
 max_input_tokens: 131072

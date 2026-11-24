@@ -1,4 +1,4 @@
-"""Command-line entry point for PhoenixRepair P0."""
+"""Command-line entry point for PhoenixRepair."""
 from __future__ import annotations
 
 import argparse
@@ -68,7 +68,7 @@ def main(argv=None):
         plan = dict(recovery_format=1, settings=settings, tasks=len(instances), instance_ids=[x["instance_id"] for x in instances],
                     task_manifest_sha256=fingerprint(instances), model_profile=PROFILES[settings["model"]],
                     review_calls_enabled=False, repair_stage_enabled=False,
-                    method_output="P0" if args.method == "our_method" else "final.patch",
+                    method_output="PhoenixRepair" if args.method == "our_method" else "final.patch",
                     old_patch_seed=False, evaluation_feedback_input=False)
         if args.dry_run:
             print(json.dumps(plan, ensure_ascii=False, indent=2))

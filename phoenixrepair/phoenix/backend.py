@@ -154,7 +154,7 @@ class DockerBackend:
         steps = max(steps, read(attempt / "query-state.json").get("reserved_step", 0))
         patch = None
         submission = read(attempt / 'submission.json')
-        for name in (("P0.patch", "submitted.patch") if self.settings["method"] == "our_method"
+        for name in (("PhoenixRepair.patch", "submitted.patch") if self.settings["method"] == "our_method"
                      else ("submitted.patch",)):
             if (attempt / name).is_file() and ((attempt / name).read_bytes().strip()
                     or self.settings['method'] != 'our_method' and str(submission.get('exit_status')).startswith('submitted')):
@@ -199,15 +199,15 @@ class DockerBackend:
                 "exit_status": exit_status, "reason": reason, "retry_limit": limit,
                 "api_error": api_error,
                 "timed_out": timed_out, "returncode": rc, "model_stats": info.get("model_stats", {}),
-                "mechanical": read(attempt / "P0.json").get("mechanical_validation", {}),
+                "mechanical": read(attempt / "submission.json").get("mechanical_validation", {}),
                 "capture": read(attempt / "capture.json")}
 
     def _finish(self, stage, state, observed, *, recovered=False):
         patch = observed["patch"].read_bytes()
         (stage / "final.patch").write_bytes(patch)
         if self.settings["method"] == "our_method":
-            (stage / "P0.patch").write_bytes(patch)
-            write_json(stage / "P0.json", {"model_calls": state["calls"],
+            (stage / "PhoenixRepair.patch").write_bytes(patch)
+            write_json(stage / "submission.json", {"model_calls": state["calls"],
                 "mechanical_validation": observed["mechanical"], "review_calls": 0, "repair_calls": 0})
         result = dict(status="completed", patch=str(stage / "final.patch"),
             has_patch=bool(patch.strip()),
@@ -227,7 +227,7 @@ class DockerBackend:
         stage.mkdir(parents=True, exist_ok=True)
         identity = dict(task=task, method=self.settings["method"], model=self.settings["model"],
             model_config=model_config(self.settings["model"], self.settings["api_base"],
-                                      p0=self.settings["method"] == "our_method", context_settings=self.settings),
+                                      shared_budget_mode=self.settings["method"] == "our_method", context_settings=self.settings),
             max_steps=self.settings["max_steps"], task_timeout=self.settings["task_timeout"],
             allowance=allowance, final_stage=final_stage, candidate=candidate, summary=summary,
             num_candidates=num_candidates, base_agent=self.base)
@@ -328,7 +328,7 @@ class DockerBackend:
                               f"resume saved code/history with calls={state['calls']}; no review", flush=True)
                         continue
                     # Even a mechanically valid diff is unfinished generation.
-                    # Never turn an exhausted API retry into a completed P0.
+                    # Never turn an exhausted API retry into a completed PhoenixRepair.
                     break
                 if mode == "submission" and not observed["mechanical"].get("valid"):
                     # Keep the original immutable seed even if replay failed
@@ -344,7 +344,7 @@ class DockerBackend:
                     # First submission or a bounded terminal capture is repaired
                     # mechanically, never replaced by another author solution.
                     mode = "submission" if (
-                        (attempt / "P0.patch").exists() or (attempt / "submitted.patch").exists()
+                        (attempt / "PhoenixRepair.patch").exists() or (attempt / "submitted.patch").exists()
                         or timed_out or observed["reason"] == "submission_timeout"
                         or state["calls"] >= allowance) else "continue"
                     recovery = {"mode": mode, "patch": str(patch), "patch_sha256": digest(patch)}

@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "phoenixrepair-p0"
+name = "phoenixrepair"
 version = "0.1.0"
-description = "Complete-localization-guided P0 patch generation"
+description = "Complete-localization-guided PhoenixRepair patch generation"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
 dependencies = [
@@ -21,7 +21,7 @@ dev = ["pytest", "build"]
 runtime = ["uv"]
 
 [project.scripts]
-phoenix-p0 = "phoenix.cli:main"
+phoenixrepair = "phoenix.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

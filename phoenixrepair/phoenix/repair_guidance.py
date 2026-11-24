@@ -1,7 +1,7 @@
-"""Author instructions used before the original P0 submission."""
+"""Author instructions used before the original PhoenixRepair submission."""
 
 SUMMARY_GUIDANCE = (
-    '\nCandidate patches are proposals, not correctness proofs. The next author produces the final P0 patch using the remaining shared generation budget. '
+    '\nCandidate patches are proposals, not correctness proofs. The next author produces the final PhoenixRepair patch using the remaining shared generation budget. '
     'Compare actual diffs and observed checks against the original issue. Preserve uncertainty and '
     'identify missing requirements; do not recommend blindly merging incompatible mechanisms.'
 )
@@ -33,14 +33,14 @@ plan prose, TODOs, and a review approval are not implementations or test results
 Check that the code implements the decisions retained from the plan, includes
 necessary cooperating edits, and adds no unsupported behavior. Prioritize checks
 for the highest-risk changes within the existing stage budget.
-This run ends at the first complete P0 submission. All 200 model calls are shared
+This run ends at the first complete PhoenixRepair submission. All 200 model calls are shared
 across this task's candidates, summary and final generation. No calls are reserved
 for a later review, repair or recheck stage. The stage budget will be stated at
 runtime. Submit the complete patch before that allowance ends. Unused earlier-stage
 allowances may be transferred to the final stage; no charged call is reset.
 When requirements share state or event ordering, verify them together in a concrete
 scenario before submission. A change fixing one requirement must not contradict a
-related one. Check interacting changes together before submitting the P0 patch.
+related one. Check interacting changes together before submitting the PhoenixRepair patch.
 Tests must execute actual repository code and report real status; log formatting
 must not mask a failed or unrun check. Unknown validation remains explicitly unknown.
 """

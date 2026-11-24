@@ -80,7 +80,7 @@ def test_frozen_location_identity_and_complete_coverage(tmp_path, task, candidat
 
 @pytest.mark.parametrize("model", ["glm-5.2", "qwen3.7-plus"])
 @pytest.mark.parametrize("candidate_count", [1, 2])
-def test_complete_localization_to_final_p0(monkeypatch, tmp_path, task, candidate, settings, model, candidate_count):
+def test_complete_localization_to_final_patch(monkeypatch, tmp_path, task, candidate, settings, model, candidate_count):
     """Exercise real localization tools and handoff; only API/Docker are faked."""
     from phoenix import pipeline, localization, summary
     settings.update(model=model, stage="all", concurrency=1)
@@ -134,8 +134,8 @@ def test_complete_localization_to_final_p0(monkeypatch, tmp_path, task, candidat
     monkeypatch.setattr(pipeline, "DockerBackend", lambda *args: backend)
     reports = pipeline.run([task], settings, "synthetic-key")
     assert len(reports) == 1 and reports[0]["status"] == "completed", reports
-    assert reports[0]["output_stage"] == "P0" and reports[0]["review_calls"] == reports[0]["repair_calls"] == 0
+    assert reports[0]["output_stage"] == "PhoenixRepair" and reports[0]["review_calls"] == reports[0]["repair_calls"] == 0
     assert events[:len(actions)] == [a[0] for a in actions]
     assert events[len(actions):] == (["generate"] if candidate_count == 1 else ["generate", "generate", "summary", "generate"])
     output = Path(settings["output"]) / model / task["instance_id"]
-    assert (output / "P0.patch").read_bytes() == (output / "final.patch").read_bytes()
+    assert (output / "PhoenixRepair.patch").read_bytes() == (output / "final.patch").read_bytes()

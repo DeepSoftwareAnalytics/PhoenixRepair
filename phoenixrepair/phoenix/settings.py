@@ -1,4 +1,4 @@
-"""Shared, explicit profiles for P0."""
+"""Shared, explicit profiles for PhoenixRepair."""
 from __future__ import annotations
 
 import copy
@@ -63,7 +63,7 @@ def load_instances(path: Path, selected=(), limit=0):
     return clean[:limit] if limit else clean
 
 
-def model_config(model, api_base, *, p0=False, context_settings=None):
+def model_config(model, api_base, *, shared_budget_mode=False, context_settings=None):
     profile = PROFILES[model]
     data = {
         "name": "openai/" + model, "api_base": api_base, "api_key": "$PHOENIX_API_KEY",
@@ -71,7 +71,7 @@ def model_config(model, api_base, *, p0=False, context_settings=None):
         "total_cost_limit": 0, "per_instance_call_limit": 0, "max_input_tokens": 131072,
         "context_compaction_threshold": 120000, "context_compaction_target": 110000,
         "context_keep_first_rounds": 5, "context_keep_last_rounds": 5,
-        "retry": {"retries": 8 if p0 else 20, "min_wait": 10, "max_wait": 120},
+        "retry": {"retries": 8 if shared_budget_mode else 20, "min_wait": 10, "max_wait": 120},
         "completion_kwargs": {
             "extra_body": {"enable_thinking": profile["thinking"]},
             "max_tokens": profile["max_tokens"], "timeout": profile["timeout"],
@@ -81,7 +81,7 @@ def model_config(model, api_base, *, p0=False, context_settings=None):
     if profile["thinking"]:
         data["preserve_thinking"] = True
         data["completion_kwargs"]["extra_body"]["preserve_thinking"] = True
-    if p0:
+    if shared_budget_mode:
         data["request_min_interval"] = (context_settings or {}).get("api_request_interval", 2)
     data.update({k: context_settings[k] for k in CONTEXT_DEFAULTS
                  if context_settings and k in context_settings})
@@ -177,7 +177,7 @@ def load_settings(mode, config_path, overrides):
 
 
 def localization_config(settings):
-    """Match the frozen complete-strategy locations used by the scored P0 run.
+    """Match the frozen complete-strategy locations used by the scored PhoenixRepair run.
 
     Localization predates the model-specific patch profiles. Applying the patch
     profile here changes the experiment, especially GLM's output allowance.

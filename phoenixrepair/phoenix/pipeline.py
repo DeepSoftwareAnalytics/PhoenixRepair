@@ -1,4 +1,4 @@
-"""Bounded scheduler for P0."""
+"""Bounded scheduler for PhoenixRepair."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
@@ -86,7 +86,7 @@ def run_task(task, settings, backend, key, candidates=None, summary_fn=summarize
             if method == "our_method" and job["kind"] == "final":
                 allowance = settings["max_steps"] - used
                 if allowance < 1:
-                    raise RuntimeError("No generation budget remains for final P0")
+                    raise RuntimeError("No generation budget remains for final PhoenixRepair")
             result = backend.generate(task, stage, allowance=allowance, final_stage=job["final"],
                 candidate=candidate, summary=summary if job["kind"] == "final" else None,
                 num_candidates=len(results))
@@ -101,10 +101,10 @@ def run_task(task, settings, backend, key, candidates=None, summary_fn=summarize
         patch = Path(final["patch"]).read_bytes()
         (directory / "final.patch").write_bytes(patch)
         if method == "our_method":
-            (directory / "P0.patch").write_bytes(patch)
+            (directory / "PhoenixRepair.patch").write_bytes(patch)
         report = dict(status="completed", model=settings["model"], instance_id=task["instance_id"],
             method=method, patch=str(directory / "final.patch"), model_calls=used,
-            review_calls=0, repair_calls=0, output_stage="P0" if method == "our_method" else "final",
+            review_calls=0, repair_calls=0, output_stage="PhoenixRepair" if method == "our_method" else "final",
             benchmark_evaluated=False, stages=results)
     except ControllerInterrupted as exc:
         report = dict(status="interrupted", model=settings["model"], instance_id=task["instance_id"],
