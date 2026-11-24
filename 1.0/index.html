@@ -286,17 +286,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#inference-profiles" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Inference profiles
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -342,17 +331,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#inference-profiles" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Inference profiles
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -374,7 +352,6 @@
 
 
 <h1 id="phoenixrepair">PhoenixRepair</h1>
-<p>PhoenixRepair localizes an issue into one or more complete repair plans. With one plan, the author generates the final patch directly. With several plans, candidate authors share half the generation budget. One same-model summary guides a fresh author using the remaining calls. Localization has its own budget.</p>
 <h2 id="run-phoenixrepair">Run PhoenixRepair</h2>
 <p>From the repository root, prepare a dedicated Python 3.11+ environment on Linux x86-64 with Docker and the task images available.</p>
 <pre><code class="language-bash">python3 -m venv .venv
@@ -387,96 +364,7 @@ export PHOENIX_RUNTIME=&quot;$PWD/.runtime&quot;
 <pre><code class="language-bash">./run.sh --model glm-5.2 --instances /path/to/tasks.jsonl --dry-run
 ./run.sh --model glm-5.2 --instances /path/to/tasks.jsonl --output runs/glm-repair
 </code></pre>
-<p>Each completed task writes <code>PhoenixRepair.patch</code> under <code>&lt;output&gt;/&lt;model&gt;/&lt;instance_id&gt;/</code>. Use <code>--resume</code> with the same inputs to continue an interrupted run. Model request defaults live in <code>phoenix/settings.py</code> and per-model run budgets in <code>configs/models/</code>.</p>
-<h2 id="inference-profiles">Inference profiles</h2>
-<p>Use the profile name with <code>--model</code>. The settings below apply to localization, patch generation and candidate comparison. Output limits are per response.</p>
-<table>
-<thead>
-<tr>
-<th>Profile</th>
-<th>Thinking</th>
-<th style="text-align: right;">Temperature</th>
-<th style="text-align: right;">Top-p</th>
-<th style="text-align: right;">Context tokens</th>
-<th style="text-align: right;">Output tokens</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>deepseek-v3.1</code></td>
-<td>Off</td>
-<td style="text-align: right;">0.6</td>
-<td style="text-align: right;">0.95</td>
-<td style="text-align: right;">131,072</td>
-<td style="text-align: right;">API default</td>
-</tr>
-<tr>
-<td><code>deepseek-v3.2</code></td>
-<td>Off</td>
-<td style="text-align: right;">1.0</td>
-<td style="text-align: right;">0.95</td>
-<td style="text-align: right;">131,072</td>
-<td style="text-align: right;">API default</td>
-</tr>
-<tr>
-<td><code>qwen3-coder-plus</code></td>
-<td>Off</td>
-<td style="text-align: right;">0.7</td>
-<td style="text-align: right;">0.80</td>
-<td style="text-align: right;">1,000,000</td>
-<td style="text-align: right;">65,536</td>
-</tr>
-<tr>
-<td><code>glm-4.7</code></td>
-<td>On</td>
-<td style="text-align: right;">0.7</td>
-<td style="text-align: right;">1.00</td>
-<td style="text-align: right;">202,752</td>
-<td style="text-align: right;">131,072</td>
-</tr>
-<tr>
-<td><code>minimax-m2.5</code></td>
-<td>On (native)</td>
-<td style="text-align: right;">1.0</td>
-<td style="text-align: right;">0.95</td>
-<td style="text-align: right;">204,800</td>
-<td style="text-align: right;">32,768</td>
-</tr>
-<tr>
-<td><code>glm-5.2</code></td>
-<td>Off</td>
-<td style="text-align: right;">1.0</td>
-<td style="text-align: right;">1.00</td>
-<td style="text-align: right;">1,048,576</td>
-<td style="text-align: right;">131,072</td>
-</tr>
-<tr>
-<td><code>qwen3.7-plus</code></td>
-<td>Off</td>
-<td style="text-align: right;">1.0</td>
-<td style="text-align: right;">0.95</td>
-<td style="text-align: right;">1,000,000</td>
-<td style="text-align: right;">131,072</td>
-</tr>
-<tr>
-<td><code>qwen3.7-plus-thinking</code></td>
-<td>On</td>
-<td style="text-align: right;">1.0</td>
-<td style="text-align: right;">0.95</td>
-<td style="text-align: right;">1,000,000</td>
-<td style="text-align: right;">131,072</td>
-</tr>
-<tr>
-<td><code>qwen-3.8-max</code></td>
-<td>Off</td>
-<td style="text-align: right;">1.0</td>
-<td style="text-align: right;">0.95</td>
-<td style="text-align: right;">1,000,000</td>
-<td style="text-align: right;">131,072</td>
-</tr>
-</tbody>
-</table>
-<p>Both DeepSeek profiles send <code>deepseek-chat</code> and omit the output-length parameter. To reproduce V3.1 (2025-08-21) or V3.2 (2025-12-01), set <code>API_BASE</code> to a deployment serving that release. The shared API identifier alone cannot pin a snapshot. Both Qwen-3.7 Plus profiles send <code>qwen3.7-plus</code> with the selected thinking flag.</p>
+<p>Each completed task writes <code>PhoenixRepair.patch</code> under <code>&lt;output&gt;/&lt;model&gt;/&lt;instance_id&gt;/</code>. Use <code>--resume</code> with the same inputs to continue an interrupted run.</p>
 
 
 
