@@ -207,19 +207,21 @@ def test_single_trajectory_runs_without_location_or_summary(monkeypatch, task, s
     assert not (Path(settings["output"]) / "localization").exists()
 
 
-def test_publish_author_trajectory_preserves_last_author_on_submission_replay(tmp_path):
+@pytest.mark.parametrize("stage_name", ["location-1", "location-2", "final"])
+def test_publish_author_trajectory_preserves_last_author_on_submission_replay(tmp_path, stage_name):
     from phoenix.backend import publish_author_trajectory
-    stage = tmp_path / "location-1"
+    stage = tmp_path / stage_name
     attempt = stage / "attempts/001"
     official = attempt / "generate/author/author.traj"
     checkpoint = attempt / "checkpoint.json"
     write_json(checkpoint, {"history": [{"content": "checkpoint"}]})
     publish_author_trajectory(stage, attempt, {"trajectory": checkpoint}, 1)
-    assert (stage / "author.traj").read_bytes() == checkpoint.read_bytes()
+    assert (stage / f"{stage_name}.traj").read_bytes() == checkpoint.read_bytes()
     write_json(official, {"history": [{"content": "completed"}]})
     publish_author_trajectory(stage, attempt, {"trajectory": checkpoint}, 0)
     publish_author_trajectory(stage, stage / "attempts/002", {"trajectory": None}, 0)
-    assert (stage / "author.traj").read_bytes() == official.read_bytes()
+    assert (stage / f"{stage_name}.traj").read_bytes() == official.read_bytes()
+    assert not (stage / "author.traj").exists()
 
 
 def test_resume_uses_bound_stage_paths(task, candidate, settings):

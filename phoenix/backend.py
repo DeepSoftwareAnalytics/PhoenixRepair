@@ -39,9 +39,9 @@ def publish_author_trajectory(stage, attempt, observed, rc):
         source = completed
     if source is None:
         return
-    temporary = stage / ".author.traj.tmp"
+    temporary = stage / f".{stage.name}.traj.tmp"
     shutil.copyfile(source, temporary)
-    temporary.replace(stage / "author.traj")
+    temporary.replace(stage / f"{stage.name}.traj")
 
 
 class DockerBackend:
@@ -250,6 +250,11 @@ class DockerBackend:
             num_candidates=num_candidates, base_agent=self.base)
         with lock(stage / "stage.lock", blocking=False):
             bind(stage / "identity.json", identity)
+            if self.settings["method"] in REPAIR_METHODS:
+                previous_trace = stage / "author.traj"
+                stage_trace = stage / f"{stage.name}.traj"
+                if previous_trace.is_file() and not stage_trace.exists():
+                    previous_trace.rename(stage_trace)
             cached = verified_result(stage)
             if cached:
                 return cached
