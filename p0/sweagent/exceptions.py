@@ -1,0 +1,75 @@
+from typing import Any, Literal
+
+"""This module contains all custom exceptions used by the SWE-agent."""
+
+
+class FormatError(Exception):
+    """Raised when the model response cannot properly be parsed into thought and actions."""
+
+
+class FunctionCallingFormatError(FormatError):
+    """Format error exception used by the function
+    calling parser."""
+
+    def __init__(
+        self,
+        message: str,
+        error_code: Literal[
+            "missing", "multiple", "incorrect_args", "invalid_json", "invalid_command", "missing_arg", "unexpected_arg"
+        ],
+        **extra_info: Any,
+    ):
+        super().__init__(message + f" [error_code={error_code}]")
+        self.message = message
+        self.extra_info = {"error_code": error_code, **extra_info}
+
+
+class ContextWindowExceededError(Exception):
+    """Raised when the context window of a LM is exceeded"""
+
+
+class CostLimitExceededError(Exception):
+    """Raised when we exceed a cost limit"""
+
+
+class InstanceCostLimitExceededError(CostLimitExceededError):
+    """Raised when we exceed the cost limit set for one task instance"""
+
+
+class TotalCostLimitExceededError(CostLimitExceededError):
+    """Raised when we exceed the total cost limit"""
+
+
+class InstanceCallLimitExceededError(CostLimitExceededError):
+    """Raised when we exceed the per instance call limit"""
+
+
+class ContentPolicyViolationError(Exception):
+    """Raised when the model response violates a content policy"""
+
+
+class ModelConfigurationError(Exception):
+    """Raised when the model configuration is invalid/no further retries
+    should be made.
+    """
+
+
+class ModelAPIError(Exception):
+    """An API failure that must preserve generation state, never submit for review."""
+
+    def __init__(self, error: BaseException, *, attempts: int, retryable: bool, budget_exhausted: bool = False):
+        self.details = {
+            "error_type": type(error).__name__, "attempts": attempts,
+            "retryable": retryable, "budget_exhausted": budget_exhausted,
+        }
+        # Do not serialize provider messages, request bodies or credentials.
+        super().__init__(f"Model API interrupted after {attempts} attempts ({type(error).__name__})")
+
+
+class TruncationPreventedError(ModelAPIError):
+    """A strict run must stop rather than shorten context or accept partial output."""
+
+    def __init__(self, reason):
+        super().__init__(RuntimeError(reason), attempts=1, retryable=False)
+        self.details["reason"] = reason
+        self.args = ("NO_TRUNCATION: " + reason,)
