@@ -22,11 +22,11 @@ CONTEXT_FIELDS = ("max_input_tokens", "context_compaction_threshold", "context_c
 
 
 def profile(api_model, temperature, top_p, context, output, thinking, *, extra=None,
-            timeout=240, tool_choice="auto", task_timeout=7200, release=None):
+            timeout=240, tool_choice="auto", release=None):
     return dict(api_model=api_model, temperature=temperature, top_p=top_p,
                 max_input_tokens=context, max_tokens=output, thinking=thinking,
                 extra_body=extra if extra is not None else {"enable_thinking": thinking},
-                timeout=timeout, tool_choice=tool_choice, task_timeout=task_timeout, release=release)
+                timeout=timeout, tool_choice=tool_choice, task_timeout=7200, release=release)
 
 
 PROFILES = {
@@ -40,8 +40,7 @@ PROFILES = {
     "qwen3.7-plus-thinking": profile("qwen3.7-plus", 1.0, 0.95, 1000000, 131072, True, timeout=600),
     "qwen-3.8-max": profile("qwen-3.8-max", 1.0, 0.95, 1000000, 131072, False, timeout=600),
     # Additional supported models outside the reported experiments.
-    "kimi-k2.7-code": profile("kimi-k2.7-code", 0.0, 1.0, 131072, 32768, True, task_timeout=3000,
-                              extra={"enable_thinking": True, "preserve_thinking": True}),
+    "kimi-k2.7-code": profile("kimi-k2.7-code", 0.0, 1.0, 131072, 32768, True),
     "deepseek-v4.1-flash": profile("deepseek-v4.1-flash", 0.0, 1.0, 131072, 32768, False, tool_choice="required"),
 }
 
@@ -237,7 +236,7 @@ def localization_config(settings):
     limit = settings.get("max_input_tokens", PROFILES[model]["max_input_tokens"])
     data["localization_runtime"] = {
         "inference": inference_fields(model),
-        "api_timeout": 240 if model == "kimi-k2.7-code" else 600,
+        "api_timeout": 600,
         "tool_choice": "auto", "task_timeout": settings.get("localization_timeout"),
         "action_repeat_limit": 10, "max_compacted_tokens": limit * 110000 // 131072,
         "context_compaction_threshold": limit * 100000 // 131072,

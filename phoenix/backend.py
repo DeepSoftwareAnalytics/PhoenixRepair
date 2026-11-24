@@ -204,7 +204,7 @@ class DockerBackend:
             limit = self.profile["environment_start_retries"]
         if not patch and (timed_out or reason or rc != 0):
             capture = capture_checkout(request, self.env, attempt,
-                official=self.settings["model"] != "kimi-k2.7-code" and self.settings["method"] not in REPAIR_METHODS and timed_out,
+                official=self.settings["method"] not in REPAIR_METHODS and timed_out,
                 timeout=request.get("capture_reserve", 60) or 60)
             if capture["status"] == "captured":
                 patch = attempt / "captured.patch"
@@ -290,7 +290,7 @@ class DockerBackend:
                     history_path = (state.get("recovery") or {}).get("trajectory")
                     offset = state["steps"] - (len(read(history_path).get("trajectory", [])) if history_path else 0)
                     reserve = 0
-                    if self.settings["method"] == SINGLE_METHOD and self.settings["model"] != "kimi-k2.7-code":
+                    if self.settings["method"] == SINGLE_METHOD:
                         reserve = min(60, remaining / 2)
                     request = dict(task=task, settings=self.settings, stage_dir=str(attempt), base_agent=self.base,
                         run_id=self.run_id, job_id=fingerprint([str(stage), state["attempts"]])[:24],

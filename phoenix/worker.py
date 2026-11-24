@@ -444,8 +444,7 @@ def run_owned(request):
         from phoenix.capture import capture_checkout
         try:
             capture_checkout(request, os.environ.copy(), stage,
-                official=request["settings"]["method"] not in REPAIR_METHODS
-                         and request["settings"]["model"] != "kimi-k2.7-code",
+                official=request["settings"]["method"] not in REPAIR_METHODS,
                 timeout=request.get("capture_reserve", 60))
         finally:
             current = process_identity(os.getpid())
