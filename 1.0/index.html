@@ -298,17 +298,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#find-the-trajectories-and-patches" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Find the trajectories and patches
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#evaluate-final-patches" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -376,17 +365,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#find-the-trajectories-and-patches" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Find the trajectories and patches
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#evaluate-final-patches" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -435,35 +413,6 @@ export PHOENIX_RUNTIME=&quot;$PWD/.runtime&quot;
 <pre><code class="language-bash">./run_swe_agent.sh --model glm-5.2 --instances /path/to/tasks.jsonl --output runs/glm-single
 </code></pre>
 <p>For either script, add <code>--instance-id TASK_ID</code> to select one task, <code>--dry-run</code> to inspect the plan, or <code>--resume</code> with the original inputs and output directory to continue an interrupted run.</p>
-<h2 id="find-the-trajectories-and-patches">Find the trajectories and patches</h2>
-<p>Let <code>TASK=&lt;output&gt;/&lt;model&gt;/&lt;instance_id&gt;</code>. Each completed task has a final patch at <code>$TASK/final.patch</code>. PhoenixRepair also writes <code>$TASK/PhoenixRepair.patch</code>.</p>
-<table>
-<thead>
-<tr>
-<th>Artifact</th>
-<th>Path</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>PhoenixRepair localization trajectory (when generated in this run)</td>
-<td><code>&lt;output&gt;/localization/&lt;model&gt;/&lt;instance_id&gt;/trajectory.jsonl</code></td>
-</tr>
-<tr>
-<td>PhoenixRepair candidate trajectory</td>
-<td><code>$TASK/candidate-&lt;n&gt;/attempts/&lt;attempt&gt;/generate/author/author.traj</code></td>
-</tr>
-<tr>
-<td>PhoenixRepair final author trajectory (multiple candidates)</td>
-<td><code>$TASK/final/attempts/&lt;attempt&gt;/generate/author/author.traj</code></td>
-</tr>
-<tr>
-<td>SWE-agent single trajectory</td>
-<td><code>$TASK/sample-1/attempts/&lt;attempt&gt;/generate/author/author.traj</code></td>
-</tr>
-</tbody>
-</table>
-<p>Attempt directories start at <code>001</code>. Recovery can create additional attempts for the same stage. With one PhoenixRepair candidate, <code>candidate-1</code> produces the final patch. Each task's <code>plan.json</code> lists its stages and <code>report.json</code> records the outcome.</p>
 <h2 id="evaluate-final-patches">Evaluate final patches</h2>
 <p>Set <code>RUN</code> to either script's output directory. Use a fresh export directory for each evaluation. Export includes every task in the run manifest; failed tasks receive an empty patch.</p>
 <p><strong>SWE-bench Verified.</strong> Install the official <code>swebench</code> Python package in your evaluation environment and start Docker. From the PhoenixRepair repository root:</p>
