@@ -29,19 +29,6 @@ Use the same setup and manifest. SWE-agent starts from the issue and runs one in
 
 For either script, add `--instance-id TASK_ID` to select one task, `--dry-run` to inspect the plan, or `--resume` with the original inputs and output directory to continue an interrupted run.
 
-## Find the trajectories and patches
-
-Let `TASK=<output>/<model>/<instance_id>`. Each completed task has a final patch at `$TASK/final.patch`. PhoenixRepair also writes `$TASK/PhoenixRepair.patch`.
-
-| Artifact | Path |
-| --- | --- |
-| PhoenixRepair localization trajectory (when generated in this run) | `<output>/localization/<model>/<instance_id>/trajectory.jsonl` |
-| PhoenixRepair candidate trajectory | `$TASK/candidate-<n>/attempts/<attempt>/generate/author/author.traj` |
-| PhoenixRepair final author trajectory (multiple candidates) | `$TASK/final/attempts/<attempt>/generate/author/author.traj` |
-| SWE-agent single trajectory | `$TASK/sample-1/attempts/<attempt>/generate/author/author.traj` |
-
-Attempt directories start at `001`. Recovery can create additional attempts for the same stage. With one PhoenixRepair candidate, `candidate-1` produces the final patch. Each task's `plan.json` lists its stages and `report.json` records the outcome.
-
 ## Evaluate final patches
 
 Set `RUN` to either script's output directory. Use a fresh export directory for each evaluation. Export includes every task in the run manifest; failed tasks receive an empty patch.
