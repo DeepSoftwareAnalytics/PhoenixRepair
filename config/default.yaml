@@ -4,6 +4,7 @@
 agent:
   templates:
     system_template: |-
+      You are PhoenixRepair.
       You are a helpful assistant that can interact with a computer to solve tasks.
     instance_template: |-
       <uploaded_files>

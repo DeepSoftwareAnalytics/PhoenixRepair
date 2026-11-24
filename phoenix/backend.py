@@ -15,7 +15,7 @@ from phoenix.recovery_profiles import recovery_profile
 from phoenix.run_state import (bind, digest, find_worker, lock, owned_alive,
                                process_identity, read, reserve_retry, retry_reason,
                                stop_owned, verified_result)
-from phoenix.settings import ROOT, fingerprint, model_config, write_json
+from phoenix.settings import LEGACY_METHOD, REPAIR_METHODS, ROOT, fingerprint, model_config, write_json
 
 
 class ControllerInterrupted(Exception):
@@ -39,6 +39,9 @@ class DockerBackend:
         self.output = Path(settings["output"])
         self.output.mkdir(parents=True, exist_ok=True)
         self.base = prepare_tools(self.output)["agent"]
+        if settings["method"] == LEGACY_METHOD:
+            templates = self.base["templates"]
+            templates["system_template"] = templates["system_template"].removeprefix("You are PhoenixRepair.\n")
         self.profile = recovery_profile(settings)
         with lock(self.output / "run-state.lock"):
             run = read(self.output / "run-state.json")
@@ -154,10 +157,10 @@ class DockerBackend:
         steps = max(steps, read(attempt / "query-state.json").get("reserved_step", 0))
         patch = None
         submission = read(attempt / 'submission.json')
-        for name in (("PhoenixRepair.patch", "submitted.patch") if self.settings["method"] == "our_method"
+        for name in (("PhoenixRepair.patch", "submitted.patch") if self.settings["method"] in REPAIR_METHODS
                      else ("submitted.patch",)):
             if (attempt / name).is_file() and ((attempt / name).read_bytes().strip()
-                    or self.settings['method'] != 'our_method' and str(submission.get('exit_status')).startswith('submitted')):
+                    or self.settings['method'] not in REPAIR_METHODS and str(submission.get('exit_status')).startswith('submitted')):
                 patch = attempt / name
                 break
         if patch is None and info.get("submission"):
@@ -183,11 +186,11 @@ class DockerBackend:
                                      model_started=(calls > request.get('prior_calls', 0)
                                                     or steps > request.get('prior_steps', 0)),
                                      trajectory=data.get("trajectory", []), api_error=api_error)
-        if self.settings["method"] != "our_method" and reason == "container_start_timeout":
+        if self.settings["method"] not in REPAIR_METHODS and reason == "container_start_timeout":
             limit = self.profile["environment_start_retries"]
         if not patch and (timed_out or reason or rc != 0):
             capture = capture_checkout(request, self.env, attempt,
-                official=self.settings["model"] != "kimi-k2.7-code" and self.settings["method"] != "our_method" and timed_out,
+                official=self.settings["model"] != "kimi-k2.7-code" and self.settings["method"] not in REPAIR_METHODS and timed_out,
                 timeout=request.get("capture_reserve", 60) or 60)
             if capture["status"] == "captured":
                 patch = attempt / "captured.patch"
@@ -205,7 +208,7 @@ class DockerBackend:
     def _finish(self, stage, state, observed, *, recovered=False):
         patch = observed["patch"].read_bytes()
         (stage / "final.patch").write_bytes(patch)
-        if self.settings["method"] == "our_method":
+        if self.settings["method"] in REPAIR_METHODS:
             (stage / "PhoenixRepair.patch").write_bytes(patch)
             write_json(stage / "submission.json", {"model_calls": state["calls"],
                 "mechanical_validation": observed["mechanical"], "review_calls": 0, "repair_calls": 0})
@@ -227,7 +230,7 @@ class DockerBackend:
         stage.mkdir(parents=True, exist_ok=True)
         identity = dict(task=task, method=self.settings["method"], model=self.settings["model"],
             model_config=model_config(self.settings["model"], self.settings["api_base"],
-                                      shared_budget_mode=self.settings["method"] == "our_method", context_settings=self.settings),
+                                      shared_budget_mode=self.settings["method"] in REPAIR_METHODS, context_settings=self.settings),
             max_steps=self.settings["max_steps"], task_timeout=self.settings["task_timeout"],
             allowance=allowance, final_stage=final_stage, candidate=candidate, summary=summary,
             num_candidates=num_candidates, base_agent=self.base)
@@ -246,7 +249,7 @@ class DockerBackend:
                 if not state.get("active"):
                     remaining = self.settings["task_timeout"] - state["spent_seconds"]
                     if mode != "submission" and (remaining <= 0 or state["steps"] >= self.settings["max_steps"]
-                            or self.settings["method"] == "our_method" and state["calls"] >= allowance):
+                            or self.settings["method"] in REPAIR_METHODS and state["calls"] >= allowance):
                         break
                     if mode == "submission":
                         if state["replay_attempts"] >= 2:
@@ -317,7 +320,7 @@ class DockerBackend:
                 if observed["exit_status"] == "exit_api":
                     state["last_api_error"] = observed["api_error"]
                     remaining = self.settings["task_timeout"] - state["spent_seconds"]
-                    calls_left = self.settings["method"] != "our_method" or state["calls"] < allowance
+                    calls_left = self.settings["method"] not in REPAIR_METHODS or state["calls"] < allowance
                     if (patch is not None and observed["trajectory"] and not observed["timed_out"]
                             and remaining > 0 and calls_left and state["steps"] < self.settings["max_steps"]
                             and reserve_retry(state, observed["reason"], observed["retry_limit"])):
@@ -335,10 +338,10 @@ class DockerBackend:
                     # halfway through applying it in a disposable checkout.
                     write_json(stage / "execution.json", state)
                     continue
-                if patch and self.settings["method"] != "our_method":
+                if patch and self.settings["method"] not in REPAIR_METHODS:
                     if (patch.stat().st_size and timed_out) or rc == 0 or str(observed["exit_status"]).startswith("submitted"):
                         return self._finish(stage, state, observed, recovered=timed_out)
-                if patch and self.settings["method"] == "our_method":
+                if patch and self.settings["method"] in REPAIR_METHODS:
                     if observed["mechanical"].get("valid"):
                         return self._finish(stage, state, observed, recovered=mode == "submission")
                     # First submission or a bounded terminal capture is repaired

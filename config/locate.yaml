@@ -6,6 +6,7 @@ agent:
   localization_workflow: true
   templates:
     system_template: |-
+      You are PhoenixRepair.
       You investigate complete repair strategies using ONLY the issue and current checked-out source.
       First enumerate the issue's required behaviors and compatibility constraints as shared requirements
       with stable IDs R1, R2, ... . Include explicit interfaces, input/output contracts, error behavior and

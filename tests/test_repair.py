@@ -104,6 +104,7 @@ def test_complete_localization_to_final_patch(monkeypatch, tmp_path, task, candi
     pending = iter(actions)
     events = []
     def api(session, endpoint, key, payload, directory, **kwargs):
+        assert payload["messages"][0]["content"].startswith("You are PhoenixRepair.")
         assert payload["model"] == model
         assert payload["max_tokens"] == 32768 and kwargs["timeout"] == 600
         name, arguments = next(pending)
@@ -115,6 +116,7 @@ def test_complete_localization_to_final_patch(monkeypatch, tmp_path, task, candi
     class FakeSession:
         def post(self, url, **kwargs):
             assert kwargs["json"]["model"] == model and kwargs["json"]["temperature"] == 0
+            assert kwargs["json"]["messages"][0]["content"].startswith("You are PhoenixRepair.")
             events.append("summary")
             class Response:
                 ok = True
@@ -134,6 +136,7 @@ def test_complete_localization_to_final_patch(monkeypatch, tmp_path, task, candi
     monkeypatch.setattr(pipeline, "DockerBackend", lambda *args: backend)
     reports = pipeline.run([task], settings, "synthetic-key")
     assert len(reports) == 1 and reports[0]["status"] == "completed", reports
+    assert reports[0]["method"] == "PhoenixRepair"
     assert reports[0]["output_stage"] == "PhoenixRepair" and reports[0]["review_calls"] == reports[0]["repair_calls"] == 0
     assert events[:len(actions)] == [a[0] for a in actions]
     assert events[len(actions):] == (["generate"] if candidate_count == 1 else ["generate", "generate", "summary", "generate"])

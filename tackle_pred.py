@@ -19,7 +19,7 @@ def find_patch_files_in_final_folders(root_path):
                     patch_content = f.read()
                 original_id = folder.name.replace('-sample-final', '')
                 result[original_id] = {
-                    "model_name_or_path": "default__openai--GLM-4.7__t-0.70__p-1.00__c-0.00___swe_bench_verified_test",
+                    "model_name_or_path": "PhoenixRepair",
                     "instance_id": original_id,
                     "model_patch": patch_content
                 }
@@ -32,7 +32,7 @@ def find_patch_files_in_final_folders(root_path):
 
 def main():
     root_directory = ""  # Please Enter The absolute path obtained in Phase 2
-    patches_data_final = find_patch_files_in_final_folders(root_directory)
+    patches_data = find_patch_files_in_final_folders(root_directory)
     if patches_data:
         output_file = os.path.join(root_directory, "answer_final.json")
         with open(output_file, 'w', encoding='utf-8') as f:

@@ -13,6 +13,10 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 API_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 FIELDS = ("instance_id", "problem_statement", "base_commit", "repo_name", "image_name")
+METHOD_NAME = "PhoenixRepair"
+LEGACY_METHOD = "our_method"
+REPAIR_METHODS = (METHOD_NAME, LEGACY_METHOD)
+
 CONTEXT_DEFAULTS = dict(max_input_tokens=131072, context_compaction_threshold=120000,
                         context_compaction_target=110000)
 PROFILES = {
@@ -91,6 +95,10 @@ def model_config(model, api_base, *, shared_budget_mode=False, context_settings=
 
 
 def load_settings(mode, config_path, overrides):
+    if not config_path.exists() and config_path.name == LEGACY_METHOD + ".yaml":
+        replacement = config_path.resolve().with_name(METHOD_NAME + ".yaml")
+        if replacement.is_relative_to(ROOT / "configs") and replacement.is_file():
+            config_path = replacement
     data = yaml.safe_load(config_path.read_text()) or {}
     allowed = {"model", "instances", "output", "runtime", "api_base", "concurrency", "max_steps",
                "task_timeout", "locations", "stage", "docker_host", "container_cpus", "container_memory",
@@ -167,8 +175,8 @@ def load_settings(mode, config_path, overrides):
             raise ValueError(key + " must be a positive integer")
     if data["stage"] not in ("all", "localization", "patch"):
         raise ValueError("stage must be all, localization, or patch")
-    if mode != "our_method" and (data.get("locations") or data["stage"] != "all"):
-        raise ValueError("locations/stage only apply to our_method")
+    if mode not in REPAIR_METHODS and (data.get("locations") or data["stage"] != "all"):
+        raise ValueError("locations/stage only apply to PhoenixRepair")
     for key in ("instances", "output", "runtime", "locations"):
         if data.get(key):
             data[key] = str(Path(data[key]).expanduser().resolve())
@@ -183,6 +191,9 @@ def localization_config(settings):
     profile here changes the experiment, especially GLM's output allowance.
     """
     data = copy.deepcopy(yaml.safe_load((ROOT / "config/locate.yaml").read_text()))
+    if settings.get("method") == LEGACY_METHOD:
+        templates = data["agent"]["templates"]
+        templates["system_template"] = templates["system_template"].removeprefix("You are PhoenixRepair.\n")
     data["agent"]["max_steps"] = settings["localization_max_steps"]
     data["localization_runtime"] = {
         "max_tokens": 32768, "api_timeout": 600,

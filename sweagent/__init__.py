@@ -79,7 +79,7 @@ def get_agent_version_info() -> str:
     hash = get_agent_commit_hash()
     rex_hash = get_rex_commit_hash()
     rex_version = get_rex_version()
-    return f"This is SWE-agent version {__version__} ({hash=}) with SWE-ReX version {rex_version} ({rex_hash=})."
+    return f"PhoenixRepair using SWE-agent {__version__} ({hash=}) with SWE-ReX version {rex_version} ({rex_hash=})."
 
 
 def impose_rex_lower_bound() -> None:
@@ -98,11 +98,11 @@ def impose_rex_lower_bound() -> None:
             "running `pip install --upgrade swe-rex`."
             "You can also rerun `pip install -e .` in this repository to install the latest version."
         )
-        get_logger("swe-agent", emoji="👋").warning(msg)
+        get_logger("PhoenixRepair", emoji="👋").warning(msg)
 
 
 impose_rex_lower_bound()
-get_logger("swe-agent", emoji="👋").info(get_agent_version_info())
+get_logger("PhoenixRepair", emoji="👋").info(get_agent_version_info())
 
 
 __all__ = [

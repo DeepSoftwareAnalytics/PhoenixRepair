@@ -50,7 +50,7 @@ class SaveApplyPatchHook(RunHook):
     def _print_patch_message(patch_output_file: Path):
         console = rich.console.Console()
         msg = [
-            "SWE-agent has produced a patch that it believes will solve the issue you submitted!",
+            "PhoenixRepair has produced a patch that it believes will solve the issue you submitted!",
             "Use the code snippet below to inspect or apply it!",
         ]
         panel = rich.panel.Panel.fit(
