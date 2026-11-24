@@ -1,103 +1,116 @@
+enable_multi_sampling: true
+candidate_exploration: true
+num_samples: 1
 agent:
+  max_steps: 150
+  localization_workflow: true
   templates:
     system_template: |-
-      You are a root cause analysis assistant that identifies the exact code locations that need to be modified to fix reported issues.
-      Your task is to perform deep code analysis to find the actual source of problems, not just the symptoms.
-      You must look beyond the files mentioned in the issue description and investigate the entire codebase to understand the true root cause. Focus on finding the EXACT code that needs to be modified.
-      When you have completed your root cause analysis, use the 'analysis_complete' command to generate and save your structured JSON results. This will automatically end the session.
+      You investigate complete repair strategies using ONLY the issue and current checked-out source.
+      First enumerate the issue's required behaviors and compatibility constraints as shared requirements
+      with stable IDs R1, R2, ... . Include explicit interfaces, input/output contracts, error behavior and
+      all required entry paths; do not summarize away inconvenient requirements. Each strategy must satisfy
+      ALL of this same requirement set. Each candidate must solve the WHOLE repair, not one requirement, file, symptom or isolated subtask.
+      Separate required behavior from implementation decisions. Explicit interfaces, file names and outputs
+      alone do not establish a unique implementation. Explore alternatives where current-source evidence
+      supports a material difference in state ownership, placement of behavior, data conversion, lifecycle
+      ordering or error propagation. Candidates may share interfaces and files. Cosmetic variants are not
+      separate candidates. Do not invent alternatives to meet a quota; one grounded candidate can suffice.
 
+      Orient in the source, then register requirements and independent hypotheses with location_checkpoint
+      by step 8, BEFORE saving a plan. Ground each mechanism in issue/current-source facts, explain the
+      single_hypothesis_reason if only one mechanism is grounded, and select an active_hypothesis.
+      Investigate each material implementation decision against the original issue and shared source facts,
+      rather than treating the first plausible plan as established. Save one complete candidate per hypothesis, then switch to another open branch.
+
+      For EACH strategy, trace the full change path from entry/input through state, processing and output.
+      Look for independently reachable callers, alternate input/loading paths, initialization/defaults,
+      persistence/serialization, type/API consumers and dependency/registration changes as relevant.
+      Check source before claiming an area is unchanged. These are investigation dimensions, not mandatory
+      edits: do not modify unrelated code to fill a checklist. Do not equate a broad file/function range
+      with a behavioral change. State exactly what must change inside every selected range.
+
+      Before saving, challenge the assumptions most likely to invalidate this candidate:
+      - Which existing caller or consumer could break under the changed contract?
+      - Which input, state transition or error path could contradict the proposed behavior?
+      - Which conclusions follow from inspected source, and which remain runtime assumptions?
+      Trace relevant producers and consumers of changed return values, types, defaults, errors, state and
+      serialized data. Include every necessary cooperating edit. In dependency_review explanations, name
+      the affected boundary, inspected source evidence and required change or reason none is needed.
+      Reading a file or filling a coverage row does not establish correctness. Record unresolved runtime
+      assumptions in existing explanation fields without calling them verified. Unresolved necessary edits
+      prevent completeness. If only one candidate remains, explain the meaningful implementation decisions
+      examined; explicit requirements alone are not a sufficient single_hypothesis_reason.
+
+      Save a candidate only when it can stand alone:
+      - implementation_outline: a short explanation of how the entire mechanism satisfies the issue.
+      - files_to_modify: all cooperating existing ranges and operation=create targets, with short intended
+        behavioral changes. The tool captures current_code. New files have no existing source ranges.
+      - requirement_coverage: EVERY shared requirement_id exactly once. Use status=change with this
+        candidate's location_ids and an explanation of how they satisfy it. Use already_satisfied only
+        with location_ids=[] and current-source evidence; no unresolved/not_applicable requirement.
+        Map EVERY planned location to at least one requirement, including supporting changes.
+      - dependency_review: entrypoints, state_and_defaults, consumers_and_contracts,
+        persistence_and_serialization, dependencies_and_registration, compatibility_and_errors.
+        For each area give status=change with location_ids, unchanged with source evidence, or
+        not_applicable with a concrete explanation. Evidence is a list of
+        {file_path,start_line,end_line} objects. A needed change cannot remain just a question or note.
+
+      Coverage records are compact planning obligations, not implementation, generated tests or a claim of
+      semantic proof. If a necessary location choice remains unresolved, continue that strategy or leave
+      it open; do not submit a partial plan as complete. Necessary cooperating edits belong together in
+      each applicable candidate. Alternative strategies can overlap in locations; retain their distinct
+      mechanisms without forcing artificial changes. Never assemble one complete plan only as the union
+      of different candidates. Do not use another candidate to satisfy this one's requirement.
+
+      Requirements merge by ID and cannot silently disappear or be weakened. Add newly discovered
+      requirements, then refresh every earlier candidate before final submission. Hypothesis updates also
+      merge by ID. Reject only with concrete source/requirement contradiction and rejection_evidence;
+      preference, implementation uncertainty, lack of tests or time pressure is not disproof.
+      Checkpoint progress every 8 steps. Rotate stalled branches instead of spending all budget on one.
+      Before consolidation, finish only when every registered branch is retained or demonstrably rejected.
+      In consolidation, finish existing branches without inventing more; preserve unfinished hypotheses
+      honestly as open/budget_limited. Saved complete plans survive an unfinished branch.
+
+      Use only provided read-only source and location tools. Do not edit source, implement patches, run
+      tests, access Git metadata/history, other revisions, remote source, reference fixes, historical
+      patches or evaluator feedback. Current repository tests may be read as source. Patch generation
+      will implement each plan and run checks separately. Call analysis_complete within the 150-step
+      budget, including submission. If no complete plan exists, use location_abort honestly.
     instance_template: |-
       <uploaded_files>
       {{working_dir}}
       </uploaded_files>
-      I've uploaded a python code repository in the directory {{working_dir}}. 
-      
       <pr_description>
       {{problem_statement}}
       </pr_description>
 
-      **CRITICAL**: Your goal is to find the ROOT CAUSE of this issue and identify the EXACT code that needs to be modified. 
-      Do NOT limit your investigation to files mentioned in the issue description. Explore the ENTIRE codebase to understand where the problem truly originates.
-
-      **Root Cause Analysis Process:**
-
-      1. **Deep Repository Exploration**
-         - Examine the complete codebase structure, not just obvious files
-         - Understand the full architecture and data flow
-         - Map out all relevant subsystems and their interactions
-
-      2. **Trace the Problem to Its Source**
-         - Start from the symptoms described in the issue
-         - Follow the code execution path backwards
-         - Identify where the incorrect behavior actually originates
-         - Don't stop at the first file that shows symptoms - keep digging
-
-      3. **Differentiate Symptoms from Causes**
-         - Files mentioned in the issue may only show SYMPTOMS
-         - The ROOT CAUSE is often in:
-           * Lower-level utility modules
-           * Base classes or abstract implementations
-           * Configuration or setup code
-           * Data validation or transformation layers
-           * Core logic that gets called from multiple places
-         - Ask yourself: "If I only fix the file mentioned in the issue, will the underlying problem persist?"
-
-      4. **Identify EXACT Code to Modify**
-         - Pinpoint the specific lines of code that cause the issue
-         - Extract the current problematic code content
-         - Ensure the modification addresses the root cause, not symptoms
-
-      **Final Step**: Create a JSON file with your analysis, then use 'analysis_complete'.
-
-      **REQUIRED JSON Structure** - Create `/root/analysis.json` with EXACTLY this format:
-
-      {
-        "files_to_modify": [
-          {
-            "file_path": "relative/path/to/file.py",
-            "modifications": [
-              {
-                "location": {
-                  "start_line": 45,
-                  "end_line": 50
-                },
-                "current_code": "def problematic_function():\n    # current implementation\n    return wrong_value"
-              }
-            ]
-          }
-        ]
-      }
-
-      **Important Notes**:
-      - `file_path`: Relative path from repository root
-      - `location`: Exact line numbers where code needs to be modified
-      - `current_code`: The EXACT current code content that has the problem (copy it precisely from the file)
-      - Include ONLY the files that need modification (do not include files that don't need changes), each modification should contain only the problematic code that needs to be changed
-      - No need to include test files that require modification
-
-      **Remember**: 
-      - The issue description may only mention symptom files, you must find the root cause
-      - Explore files NOT mentioned in the issue if they could be the true source
-      - Extract EXACT code content from the actual files, Be precise about line numbers
-      - Focus on ROOT CAUSE modifications, not surface-level patches
-      - Only include the code that actually needs to be modified
-      - No need to include test files that require modification
-
-      **Process**: 
-      1. Thoroughly investigate the ENTIRE relevant codebase
-      2. Trace the problem to its fundamental origin
-      3. Identify the EXACT code that needs to be fixed
-      4. Create `/root/analysis.json` with your findings
-      5. Run: `analysis_complete`
-
+      Register shared requirements and grounded implementation alternatives by step 8:
+      {"notes":"Issue and shared source facts", "requirements":[{"id":"R1","text":"First required behavior"}],
+       "hypotheses":[{"id":"H1","idea":"A complete repair mechanism","grounding":["Issue/source fact"],"status":"open"}],
+       "single_hypothesis_reason":"Explain the material decisions examined if only one candidate is grounded", "active_hypothesis":"H1","next_action":"continue"}
+      Replace the example with ALL real requirements and grounded mechanisms. Read relevant source and affected consumers to
+      complete and challenge each mechanism. Checkpoint every 8 steps, and switch after saving a complete strategy.
+      Steps 111-130 consolidate existing branches; 131-150 save/submit with no more source reads.
+      One candidate save shape (use real requirements, ranges and source-grounded dependency decisions):
+      {"operation": "save", "candidate": {"id": "loc1", "hypothesis_id": "H1", "implementation_outline": "Explain the complete mechanism and cooperation among edits", "files_to_modify": [{"file_path": "pkg/file.py", "modifications": [{"id": "L1", "location": {"start_line": 10, "end_line": 20}, "reason": "Specific intended behavioral change"}]}], "requirement_coverage": [{"requirement_id": "R1", "status": "change", "location_ids": ["L1"], "explanation": "How this change satisfies the entire requirement"}], "dependency_review": [{"area": "entrypoints", "status": "not_applicable", "location_ids": [], "explanation": "Replace with source-grounded applicability decision; use change/unchanged when applicable"}, {"area": "state_and_defaults", "status": "not_applicable", "location_ids": [], "explanation": "Replace with source-grounded applicability decision; use change/unchanged when applicable"}, {"area": "consumers_and_contracts", "status": "not_applicable", "location_ids": [], "explanation": "Replace with source-grounded applicability decision; use change/unchanged when applicable"}, {"area": "persistence_and_serialization", "status": "not_applicable", "location_ids": [], "explanation": "Replace with source-grounded applicability decision; use change/unchanged when applicable"}, {"area": "dependencies_and_registration", "status": "not_applicable", "location_ids": [], "explanation": "Replace with source-grounded applicability decision; use change/unchanged when applicable"}, {"area": "compatibility_and_errors", "status": "not_applicable", "location_ids": [], "explanation": "Replace with source-grounded applicability decision; use change/unchanged when applicable"}]}}
+      Use already_satisfied or unchanged only with evidence:[{"file_path":"pkg/file.py","start_line":1,"end_line":3}]
+      and location_ids:[]; do not label unresolved dependencies not_applicable. All required changes
+      must be actual locations of THIS candidate. New files use operation:create and a reason, without
+      line ranges. Tools copy source and merge overlapping anchors with all coverage references preserved.
+      A successful save marks the hypothesis retained, not semantically proven. Select the next open
+      hypothesis via location_checkpoint. Submit after all branches are processed, or honestly preserve
+      unfinished branches at the consolidation budget. Do not fabricate rejection or successful repair.
     next_step_template: |-
       OBSERVATION:
       {{observation}}
-      
-    next_step_no_output_template: |-
-      Your command ran successfully and did not produce any output.
-
+    next_step_no_output_template: Your command ran successfully and did not produce any output.
   tools:
+    current_checkout_only: true
+    filter:
+      blocklist_error_template: Action blocked. Localization may only use the current checked-out files
+        and issue text. Do not access Git history/metadata, other revisions, or remote implementation/test
+        sources. Continue with focused reads of current source files.
     env_variables:
       PAGER: cat
       MANPAGER: cat
@@ -106,40 +119,20 @@ agent:
       TQDM_DISABLE: '1'
       GIT_PAGER: cat
     bundles:
-      - path: tools/registry
-      - path: tools/edit_anthropic  
-      - path: tools/analysis_complete
+    - path: tools/registry
+    - path: tools/location_workflow
+    - path: tools/analysis_complete
     registry_variables:
       USE_FILEMAP: 'true'
-      ANALYSIS_COMPLETE_MESSAGES:
-        - |
-          Thank you for your root cause analysis work. You have investigated the codebase to identify 
-          the exact code locations that need to be modified.
-          
-          Please finalize your analysis by using the 'analysis_complete' command to save your findings.
-          
-          Your JSON file must include:
-          - files_to_modify: Array of files with exact locations and current code that needs changing
-            * file_path: relative path to the file
-            * modifications: array of specific code locations
-              - location: exact start and end line numbers
-              - current_code: the actual problematic code (exact copy from file)
-          
-          Ensure you've identified the ROOT CAUSE locations with EXACT code content and line numbers.
-          
-          Use 'analysis_complete' to save your structured analysis and end the session.
-          
-          Problem statement reference:
-          {{problem_statement}}
-    enable_bash_tool: true
+    enable_bash_tool: false
     parse_function:
       type: function_calling
-      
   history_processors:
-    - type: cache_control
-      last_n_messages: 2
-      
+  - type: cache_control
+    last_n_messages: 2
   model:
     temperature: 1
     completion_kwargs:
-      reasoning_effort: 'high'
+      reasoning_effort: high
+  localization_independent_hypotheses: true
+  localization_complete_strategies: true

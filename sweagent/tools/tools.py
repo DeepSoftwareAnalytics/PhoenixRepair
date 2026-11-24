@@ -14,11 +14,13 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
+from swerex.exceptions import CommandTimeoutError
 from swerex.runtime.abstract import Command as RexCommand
 from swerex.runtime.abstract import UploadRequest
 from typing_extensions import Self
 
 from sweagent.environment.swe_env import SWEEnv
+from sweagent.tools.execution_timeout import invokes_command, invokes_git
 from sweagent.tools.bundle import Bundle
 from sweagent.tools.commands import BASH_COMMAND, Command
 from sweagent.tools.parsing import FunctionCallingParser, JsonParser, ParseFunction
@@ -139,6 +141,13 @@ class ToolConfig(BaseModel):
     execution_timeout: int = 30
     """Timeout for executing commands in the environment"""
 
+    current_checkout_only: bool = False
+    """Block model actions accessing Git history/metadata in localization."""
+
+    git_execution_timeout: int = Field(default=180, ge=1)
+    submit_execution_timeout: int = Field(default=600, ge=1)
+    """Timeout for shell actions invoking Git, including compound commands."""
+
     install_timeout: int = 300
     """Timeout used for each of the installation commands"""
 
@@ -148,6 +157,7 @@ class ToolConfig(BaseModel):
     """
 
     max_consecutive_execution_timeouts: int = 3
+    """Consecutive timeout stop limit; 0 returns every timeout to the model without this stop."""
     """Maximum number of consecutive execution timeouts before the agent exits.
     """
 
@@ -289,6 +299,11 @@ class ToolHandler:
             *(self._is_command_available(env, command.name, env_vars) for command in self.config.commands)
         )
 
+    def execution_timeout_for(self, action: str) -> int:
+        if invokes_command(action, self.config.submit_command):
+            return self.config.submit_execution_timeout
+        return self.config.git_execution_timeout if invokes_git(action) else self.config.execution_timeout
+
     def _install_commands(self, env: SWEEnv) -> None:
         """Make sure all commands are available in the container"""
         env.set_env_variables(self.config.env_variables)
@@ -338,14 +353,38 @@ class ToolHandler:
         """Execute state commands from all bundles and combine their results.
         This can be used to extract environment variables etc. from the environment.
         """
+        self.state_recovery_note = ''
         if self.mock_state is not None:
             return self.mock_state
 
-        for state_command in self.config.state_commands:
-            env.communicate(state_command, check="warn")
-        combined_state = self._get_state(env)
-        self.logger.debug(f"Retrieved state from environment: {combined_state}")
-        return combined_state
+        for attempt in range(2):
+            try:
+                if self.config.state_commands:
+                    # Preserve the current cwd/exports, including action-side changes.
+                    env.prepare_timeout_recovery()
+                for state_command in self.config.state_commands:
+                    env.communicate(state_command, check="warn")
+                combined_state = self._get_state(env)
+                self.logger.debug(f"Retrieved state from environment: {combined_state}")
+                return combined_state
+            except CommandTimeoutError:
+                if attempt:
+                    self.logger.error('[状态查询失败] Still timed out after one shell rebuild; stopping trajectory')
+                    raise
+                self.logger.warning('[状态查询恢复] Timed out; rebuilding shell and retrying state query once')
+                # Interrupt may have appeared successful before this query stalled.
+                # Rebuild directly; never repeat the model's potentially mutating action.
+                try:
+                    recovery = env.recover_timed_out_session(force_restart=True)
+                except Exception:
+                    self.logger.exception('[状态查询恢复失败] Could not rebuild shell; stopping trajectory')
+                    raise
+                self.state_recovery_note = (
+                    'The framework state query timed out after the action. '
+                    + recovery + ' Only the state query was retried; the preceding action was NOT replayed. '
+                    'Use its observation above and inspect existing changes before repeating any edit. '
+                    'Non-exported shell variables, functions and shell activation may need reinitializing.'
+                )
 
     # Blocking
     # --------
@@ -355,6 +394,14 @@ class ToolHandler:
         action = action.strip()
         if not action:
             return False
+        if self.config.current_checkout_only:
+            # Covers shell Git, Python bindings/subprocess literals, and direct
+            # metadata reads. Physical object isolation is the second layer.
+            forbidden = re.search(r"(?<![\w])(?:git|\.git|gitpython|dulwich|pygit2)(?![\w])", action, re.I)
+            remote_source = re.search(r"(?:github\.com|raw\.githubusercontent\.com|gitlab\.com|bitbucket\.org)", action, re.I)
+            if forbidden or remote_source or invokes_git(action):
+                get_logger("swea-tools").warning("[历史访问拦截] 定位仅允许读取当前检出的代码，已阻止 Git/历史来源访问")
+                return True
         if any(f.startswith(action) for f in self.config.filter.blocklist):
             return True
         if action in self.config.filter.blocklist_standalone:
@@ -378,6 +425,14 @@ class ToolHandler:
     def parse_actions(self, output: dict) -> tuple[str, str]:
         """Parse the model output into a thought and action."""
         return self.config.parse_function(output, self.config.commands)
+
+    def parse_action_list(self, output: dict) -> tuple[str, list[str]]:
+        """Keep function calls separate for execution and per-call observations."""
+        parser = self.config.parse_function
+        if isinstance(parser, FunctionCallingParser):
+            return output["message"], parser.parse_tool_calls(output, self.config.commands)
+        thought, action = self.parse_actions(output)
+        return thought, [action]
 
     def guard_multiline_input(self, action: str) -> str:
         """Split action by multiline commands, then append the first line in each multiline command with "<< '{end_name}'".

@@ -20,12 +20,13 @@ from swerex.exceptions import SwerexException
 from tenacity import (
     RetryCallState,
     Retrying,
-    retry_if_not_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_random_exponential,
 )
 
 from sweagent import REPO_ROOT
+from sweagent.agent.api_errors import is_api_error, is_retryable_api_error
 from sweagent.exceptions import (
     ContentPolicyViolationError,
     ContextWindowExceededError,
@@ -33,12 +34,15 @@ from sweagent.exceptions import (
     FunctionCallingFormatError,
     InstanceCallLimitExceededError,
     InstanceCostLimitExceededError,
+    ModelAPIError,
+    TruncationPreventedError,
     ModelConfigurationError,
     TotalCostLimitExceededError,
 )
 from sweagent.tools.tools import ToolConfig
 from sweagent.types import History, HistoryItem
 from sweagent.utils.log import get_logger
+from sweagent.utils.api_usage import tracked_completion
 
 try:
     import readline  # noqa: F401
@@ -55,8 +59,8 @@ _THREADS_THAT_USED_API_KEYS = []
 class RetryConfig(PydanticBaseModel):
     """This configuration object specifies how many times to retry a failed LM API call."""
 
-    retries: int = 20
-    """Number of retries"""
+    retries: int = Field(default=20, ge=1)
+    """Maximum total attempts per query, including the first request."""
     min_wait: float = 10
     """Minimum wait time between retries (random exponential wait)"""
     max_wait: float = 120
@@ -76,6 +80,11 @@ class GenericAPIModelConfig(PydanticBaseModel):
     )
     total_cost_limit: float = Field(default=0.0, description="Total cost limit.")
     per_instance_call_limit: int = Field(default=0, description="Per instance call limit.")
+    reject_truncation: bool = False
+    context_compaction_threshold: int = Field(default=0, ge=0, description="Summarize long middle tool outputs above this input-token count; 0 disables it.")
+    context_compaction_target: int = Field(default=110000, ge=1)
+    context_keep_first_rounds: int = Field(default=5, ge=1)
+    context_keep_last_rounds: int = Field(default=5, ge=1)
     temperature: float = 0.0
     """Sampling temperature"""
     top_p: float | None = 1.0
@@ -94,6 +103,10 @@ class GenericAPIModelConfig(PydanticBaseModel):
 
     completion_kwargs: dict[str, Any] = {}
     """Additional kwargs to pass to `litellm.completion`"""
+
+    preserve_thinking: bool = False
+    """Retain OpenAI-compatible reasoning_content in subsequent assistant messages."""
+    request_min_interval: float = Field(default=0, ge=0)
 
     convert_system_to_user: bool = False
     """Whether to convert system messages to user messages. This is useful for
@@ -664,11 +677,6 @@ class LiteLLMModel(AbstractModel):
             msg = "Instance cost limit exceeded"
             raise InstanceCostLimitExceededError(msg)
 
-        if 0 < self.config.per_instance_call_limit < self.stats.api_calls:
-            self.logger.warning(f"API calls {self.stats.api_calls} exceeds limit {self.config.per_instance_call_limit}")
-            msg = "Per instance call limit exceeded"
-            raise InstanceCallLimitExceededError(msg)
-
     def _sleep(self) -> None:
         elapsed_time = time.time() - GLOBAL_STATS.last_query_timestamp
         if elapsed_time < self.config.delay:
@@ -677,6 +685,8 @@ class LiteLLMModel(AbstractModel):
             GLOBAL_STATS.last_query_timestamp = time.time()
 
     def _single_query(self, messages: list[dict[str, str]], n: int | None = None, temperature: float | None = None) -> list[dict]:
+        if 0 < self.config.per_instance_call_limit <= self.stats.api_calls:
+            raise InstanceCallLimitExceededError("Per instance call limit reached before next request")
         self._sleep()
         # Workaround for litellm bug https://github.com/SWE-agent/SWE-agent/issues/1109
         messages_no_cache_control = copy.deepcopy(messages)
@@ -685,12 +695,45 @@ class LiteLLMModel(AbstractModel):
                 del message["cache_control"]
             if "thinking_blocks" in message:
                 del message["thinking_blocks"]
-        input_tokens: int = litellm.utils.token_counter(messages=messages_no_cache_control, model=self.custom_tokenizer["identifier"] if self.custom_tokenizer is not None else self.config.name, custom_tokenizer=self.custom_tokenizer)
+        def count_tokens(items):
+            cleaned = copy.deepcopy(items)
+            reasoning = []
+            for item in cleaned:
+                item.pop('cache_control', None)
+                item.pop('thinking_blocks', None)
+                content = item.pop('reasoning_content', None)
+                if self.config.preserve_thinking and content:
+                    reasoning.append(content)
+            tokenizer = self.custom_tokenizer['identifier'] if self.custom_tokenizer is not None else self.config.name
+            count = litellm.utils.token_counter(messages=cleaned, model=tokenizer, custom_tokenizer=self.custom_tokenizer)
+            return count + sum(litellm.utils.token_counter(text=text, model=tokenizer, custom_tokenizer=self.custom_tokenizer) for text in reasoning)
+        input_tokens: int = count_tokens(messages_no_cache_control)
+        compaction = None
+        threshold = self.config.context_compaction_threshold
+        if threshold and input_tokens > threshold:
+            from sweagent.agent.context_compaction import compact_tool_outputs
+            before = input_tokens
+            messages, input_tokens, summarized = compact_tool_outputs(
+                messages, count_tokens, keep_first=self.config.context_keep_first_rounds,
+                keep_last=self.config.context_keep_last_rounds,
+                target_tokens=min(self.config.context_compaction_target, threshold))
+            messages_no_cache_control = copy.deepcopy(messages)
+            for item in messages_no_cache_control:
+                item.pop("cache_control", None)
+                item.pop("thinking_blocks", None)
+            compaction = {"input_tokens_before": before, "input_tokens_after": input_tokens,
+                          "summarized_tool_outputs": summarized,
+                          "target_tokens": min(self.config.context_compaction_target, threshold),
+                          "keep_first_rounds": self.config.context_keep_first_rounds,
+                          "keep_last_rounds": self.config.context_keep_last_rounds}
+            self.logger.warning("[上下文压缩] %s", json.dumps(compaction, ensure_ascii=False))
         if self.model_max_input_tokens is None:
             msg = (f"No max input tokens found for model {self.config.name!r}. If you are using a local model, you can set `max_input_token` in the model config to override this.")
             self.logger.warning(msg)
         elif input_tokens > self.model_max_input_tokens > 0:
             msg = f"Input tokens {input_tokens} exceed max tokens {self.model_max_input_tokens}"
+            if self.config.reject_truncation:
+                raise TruncationPreventedError(msg)
             raise ContextWindowExceededError(msg)
         extra_args = {}
         if self.config.api_base:
@@ -698,17 +741,26 @@ class LiteLLMModel(AbstractModel):
             extra_args["api_base"] = self.config.api_base
         if self.tools.use_function_calling:
             extra_args["tools"] = self.tools.tools
-        self.logger.info(f"api_base:{extra_args['api_base']}")
-        completion_kwargs = self.config.completion_kwargs
-        completion_kwargs['extra_headers'] = {'anthropic-beta': 'output-128k-2025-02-19'}
+            allowed = getattr(self, 'active_tool_names', None)
+            if allowed is not None:
+                extra_args['tools'] = [tool for tool in extra_args['tools'] if tool['function']['name'] in allowed]
+                if not extra_args['tools']:
+                    raise ValueError('Localization controller selected no available tools')
+        self.logger.info('api_base: %s', self.config.api_base)
+        completion_kwargs = copy.deepcopy(self.config.completion_kwargs)
         model_name = self.config.name
-        if "deepseek" or "glm" in self.config.name.lower():
+        if any(name in self.config.name.lower() for name in ("deepseek", "glm")):
             completion_kwargs.pop('reasoning_effort', None)
             self.logger.debug(f"Using official DeepSeek format: {model_name}")
         if self.lm_provider == "anthropic":
             completion_kwargs["max_tokens"] = self.model_max_output_tokens
+        if self.config.request_min_interval:
+            from sweagent.agent.request_pacing import wait_for_request
+            wait_for_request(os.environ['PHOENIX_ACCOUNT_ID'], self.config.name, self.config.request_min_interval)
         try:
-            response: litellm.types.utils.ModelResponse = litellm.completion(
+            response: litellm.types.utils.ModelResponse = tracked_completion(
+                litellm.completion,
+                usage_context=getattr(self, 'api_usage_context', None),
                 model=model_name,
                 messages=messages,
                 temperature=self.config.temperature if temperature is None else temperature,
@@ -720,12 +772,21 @@ class LiteLLMModel(AbstractModel):
                 **extra_args,
                 n=n,
             )
+        except litellm.exceptions.RateLimitError:
+            if self.config.request_min_interval:
+                from sweagent.agent.request_pacing import cooldown
+                cooldown(os.environ['PHOENIX_ACCOUNT_ID'], self.config.name)
+            raise
         except litellm.exceptions.ContextWindowExceededError as e:
+            if self.config.reject_truncation:
+                raise TruncationPreventedError("Provider context limit reached; history was not shortened") from e
             raise ContextWindowExceededError from e
         except litellm.exceptions.ContentPolicyViolationError as e:
             raise ContentPolicyViolationError from e
         except litellm.exceptions.BadRequestError as e:
             if "is longer than the model's context length" in str(e):
+                if self.config.reject_truncation:
+                    raise TruncationPreventedError("Provider context limit reached; history was not shortened") from e
                 raise ContextWindowExceededError from e
             raise
         try:
@@ -774,16 +835,34 @@ class LiteLLMModel(AbstractModel):
             output = choices[i].message.content or ""
             output_tokens += litellm.utils.token_counter(text=output, model=self.custom_tokenizer["identifier"] if self.custom_tokenizer is not None else self.config.name, custom_tokenizer=self.custom_tokenizer)
             output_dict = {"message": output}
+            if self.config.preserve_thinking:
+                reasoning = getattr(choices[i].message, 'reasoning_content', None)
+                if reasoning is None:
+                    reasoning = (getattr(choices[i].message, 'provider_specific_fields', None) or {}).get('reasoning_content')
+                if reasoning is not None:
+                    output_dict['reasoning_content'] = reasoning
             if self.tools.use_function_calling:
                 if response.choices[i].message.tool_calls:
                     tool_calls = [call.to_dict() for call in response.choices[i].message.tool_calls]
                 else:
                     tool_calls = []
                 output_dict["tool_calls"] = tool_calls
+                metadata = {
+                    "finish_reason": choices[i].finish_reason,
+                    "tool_call_count": len(tool_calls),
+                    "tool_choice": completion_kwargs.get("tool_choice", "auto"),
+                }
+                output_dict["response_metadata"] = metadata
+                self.logger.debug("Tool response metadata: %s", json.dumps(metadata))
             if (hasattr(response.choices[i].message, "thinking_blocks") and response.choices[i].message.thinking_blocks):
                 output_dict["thinking_blocks"] = response.choices[i].message.thinking_blocks
+            if compaction is not None:
+                output_dict.setdefault("response_metadata", {})["context_compaction"] = compaction
             outputs.append(output_dict)
         self._update_stats(input_tokens=input_tokens, output_tokens=output_tokens, cost=cost)
+        if self.config.reject_truncation and any(c.finish_reason == "length" for c in choices):
+            self.last_rejected_response = response.model_dump()
+            raise TruncationPreventedError("finish_reason=length; incomplete output was not executed or submitted")
         return outputs
 
     def _query(
@@ -801,44 +880,41 @@ class LiteLLMModel(AbstractModel):
         messages = self._history_to_messages(history)
 
         def retry_warning(retry_state: RetryCallState):
-            exception_info = ""
-            if attempt.retry_state.outcome is not None and attempt.retry_state.outcome.exception() is not None:
-                exception = attempt.retry_state.outcome.exception()
-                exception_info = f" due to {exception.__class__.__name__}: {str(exception)}"
-
+            exception = retry_state.outcome.exception() if retry_state.outcome else None
             self.logger.warning(
-                f"Retrying LM query: attempt {attempt.retry_state.attempt_number} "
-                f"(slept for {attempt.retry_state.idle_for:.2f}s)"
-                f"{exception_info}"
+                "Retrying the same LM query after %s (attempt %d/%d, slept %.2fs)",
+                type(exception).__name__, retry_state.attempt_number,
+                self.config.retry.retries, retry_state.idle_for,
             )
 
-        for attempt in Retrying(
+        retrying = Retrying(
             stop=stop_after_attempt(self.config.retry.retries),
             wait=wait_random_exponential(min=self.config.retry.min_wait, max=self.config.retry.max_wait),
             reraise=True,
-            retry=retry_if_not_exception_type(
-                (
-                    ContextWindowExceededError,
-                    CostLimitExceededError,
-                    RuntimeError,
-                    litellm.exceptions.UnsupportedParamsError,
-                    litellm.exceptions.NotFoundError,
-                    litellm.exceptions.PermissionDeniedError,
-                    litellm.exceptions.ContextWindowExceededError,
-                    litellm.exceptions.APIError,
-                    litellm.exceptions.ContentPolicyViolationError,
-                    TypeError,
-                    litellm.exceptions.AuthenticationError,
-                    ContentPolicyViolationError,
-                    ModelConfigurationError,
-                    KeyboardInterrupt,
-                    IndexError,
-                )
-            ),
+            retry=retry_if_exception(is_retryable_api_error),
             before_sleep=retry_warning,
-        ):
-            with attempt:
-                result = self._query(messages, n=n, temperature=temperature)
+        )
+        last_api_error = None
+        attempt_number = 0
+        try:
+            for attempt in retrying:
+                attempt_number = attempt.retry_state.attempt_number
+                with attempt:
+                    try:
+                        result = self._query(messages, n=n, temperature=temperature)
+                    except Exception as error:
+                        if is_api_error(error):
+                            last_api_error = error
+                        raise
+        except Exception as error:
+            # A failed transport attempt can consume the last call. Do not let
+            # the next budget check disguise that interruption as a submission.
+            exhausted = isinstance(error, InstanceCallLimitExceededError) and last_api_error is not None
+            if is_api_error(error) or exhausted:
+                cause = last_api_error if exhausted else error
+                raise ModelAPIError(cause, attempts=attempt_number - int(exhausted),
+                    retryable=is_retryable_api_error(cause), budget_exhausted=exhausted) from error
+            raise
         if n is None or n == 1:
             return result[0]
         return result
@@ -865,11 +941,16 @@ class LiteLLMModel(AbstractModel):
                     "tool_call_id": history_item["tool_call_ids"][0],  # type: ignore
                 }
             elif (tool_calls := history_item.get("tool_calls")) is not None:
+                for call in tool_calls:
+                    if isinstance(call["function"].get("arguments"), dict):
+                        call["function"]["arguments"] = json.dumps(call["function"]["arguments"])
                 message = {"role": role, "content": history_item["content"], "tool_calls": tool_calls}
                 if thinking_blocks := history_item.get("thinking_blocks"):
                     message["thinking_blocks"] = thinking_blocks
             else:
                 message = {"role": role, "content": history_item["content"]}
+            if getattr(self.config, 'preserve_thinking', False) and role == 'assistant' and history_item.get('reasoning_content') is not None:
+                message['reasoning_content'] = history_item['reasoning_content']
             if "cache_control" in history_item:
                 message["cache_control"] = history_item["cache_control"]
             messages.append(message)

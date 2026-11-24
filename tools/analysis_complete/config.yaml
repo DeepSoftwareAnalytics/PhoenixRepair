@@ -1,4 +1,0 @@
-tools:
-  analysis_complete:
-    signature: "analysis_complete"
-    docstring: "Complete code analysis. First create /root/analysis.json with your findings, then run this command."
