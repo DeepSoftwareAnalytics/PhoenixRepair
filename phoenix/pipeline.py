@@ -10,7 +10,7 @@ import time
 
 from phoenix.settings import REPAIR_METHODS, SINGLE_METHOD, localization_config, write_json
 from phoenix.summary import summarize
-from phoenix.run_state import bind, digest
+from phoenix.run_state import bind, digest, read
 from phoenix.backend import DockerBackend, ControllerInterrupted
 
 
@@ -20,13 +20,13 @@ def task_jobs(candidates=1, max_calls=200):
     if max_calls <= 40:
         raise ValueError("This experiment requires max_steps > 40 and releases the review reservation")
     if candidates == 1:
-        return [dict(stage="candidate-1", kind="candidate", final=True, allowance=max_calls)]
+        return [dict(stage="location-1", kind="candidate", final=True, allowance=max_calls)]
     candidate_pool = max_calls // 2
     if candidates > candidate_pool:
         raise ValueError("Too many candidates for the shared task budget")
-    return [dict(stage=f"candidate-{i+1}", kind="candidate", final=False,
+    return [dict(stage=f"location-{i+1}", kind="candidate", final=False,
                  allowance=candidate_pool // candidates + (i < candidate_pool % candidates)) for i in range(candidates)] + [
-        dict(stage="summary", kind="summary", final=False),
+        dict(stage="final/comparison", kind="summary", final=False),
         dict(stage="final", kind="final", final=True, allowance=max_calls - candidate_pool - 1)]
 
 
@@ -72,6 +72,15 @@ def run_task(task, settings, backend, key, candidates=None, summary_fn=summarize
         jobs = [dict(stage="sample-1", kind="sample", final=True, allowance=settings["max_steps"])]
     else:
         jobs = task_jobs(len(candidates or []), settings["max_steps"])
+        # Older runs bind their stage paths into task and worker identities.
+        # Keep those paths on resume, but recompute budgets and validate the full identity.
+        previous_jobs = read(directory / "task-identity.json").get("value", {}).get("jobs", [])
+        if previous_jobs and previous_jobs[0]["stage"] == "candidate-1":
+            for job in jobs:
+                if job["kind"] == "candidate":
+                    job["stage"] = job["stage"].replace("location-", "candidate-", 1)
+                elif job["kind"] == "summary":
+                    job["stage"] = "summary"
     bind(directory / "task-identity.json", dict(task=task, jobs=jobs, candidates=candidates,
                                                model=settings["model"], method=method))
     write_json(directory / "plan.json", jobs)

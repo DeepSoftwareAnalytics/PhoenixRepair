@@ -177,6 +177,19 @@ def test_complete_localization_to_final_patch(monkeypatch, tmp_path, task, candi
     assert events[len(actions):] == (["generate"] if candidate_count == 1 else ["generate", "generate", "summary", "generate"])
     output = Path(settings["output"]) / model / task["instance_id"]
     assert (output / "PhoenixRepair.patch").read_bytes() == (output / "final.patch").read_bytes()
+    assert (output / "location-1/final.patch").is_file()
+    if candidate_count == 1:
+        assert not (output / "final").exists()
+    else:
+        assert (output / "location-2/final.patch").is_file()
+        assert (output / "final/final.patch").read_bytes() == (output / "final.patch").read_bytes()
+        comparison = output / "final/comparison"
+        trace = json.loads((output / "final/comparison.traj").read_text())
+        request = json.loads((comparison / "request.json").read_text())
+        assert trace["history"][:-1] == request["messages"]
+        assert trace["history"][-1] == {"role": "assistant", "content": (comparison / "summary.txt").read_text()}
+    assert not (output / "candidate-1").exists()
+
 
 
 def test_single_trajectory_runs_without_location_or_summary(monkeypatch, task, settings):
@@ -192,3 +205,37 @@ def test_single_trajectory_runs_without_location_or_summary(monkeypatch, task, s
         str(Path(report["patch"]).parent / "sample-1/final.patch")]
     assert Path(report["patch"]).is_file()
     assert not (Path(settings["output"]) / "localization").exists()
+
+
+def test_publish_author_trajectory_preserves_last_author_on_submission_replay(tmp_path):
+    from phoenix.backend import publish_author_trajectory
+    stage = tmp_path / "location-1"
+    attempt = stage / "attempts/001"
+    official = attempt / "generate/author/author.traj"
+    checkpoint = attempt / "checkpoint.json"
+    write_json(checkpoint, {"history": [{"content": "checkpoint"}]})
+    publish_author_trajectory(stage, attempt, {"trajectory": checkpoint}, 1)
+    assert (stage / "author.traj").read_bytes() == checkpoint.read_bytes()
+    write_json(official, {"history": [{"content": "completed"}]})
+    publish_author_trajectory(stage, attempt, {"trajectory": checkpoint}, 0)
+    publish_author_trajectory(stage, stage / "attempts/002", {"trajectory": None}, 0)
+    assert (stage / "author.traj").read_bytes() == official.read_bytes()
+
+
+def test_resume_uses_bound_stage_paths(task, candidate, settings):
+    from phoenix.run_state import bind
+    directory = Path(settings["output"]) / settings["model"] / task["instance_id"]
+    second = {**candidate, "id": "C2"}
+    candidates = [candidate, second]
+    jobs = task_jobs(2)
+    for job, stage in zip(jobs, ["candidate-1", "candidate-2", "summary", "final"]):
+        job["stage"] = stage
+    bind(directory / "task-identity.json", dict(task=task, jobs=jobs, candidates=candidates,
+                                               model=settings["model"], method=settings["method"]))
+    def compare(task, results, settings, stage, key, *, shared_budget):
+        assert stage == directory / "summary"
+        return "Use the second strategy."
+    result = run_task(task, settings, Backend(), "fixture", candidates, summary_fn=compare)
+    assert result["status"] == "completed"
+    assert json.loads((directory / "plan.json").read_text()) == jobs
+    assert not (directory / "location-1").exists()
