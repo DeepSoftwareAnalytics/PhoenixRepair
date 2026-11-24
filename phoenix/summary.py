@@ -27,7 +27,6 @@ def summarize(task, candidates, settings, directory, key):
     prompt += SUMMARY_GUIDANCE
     (directory / "prompt.txt").write_text(prompt)
     write_json(directory / "inputs.json", [{k: v for k, v in row.items() if k != "submission"} for row in inputs])
-    kimi = settings["model"] == "kimi-k2.7-code"
     payload = dict(inference_fields(settings["model"]), messages=[{"role": "user", "content": prompt}])
     timeout = (30, PROFILES[settings["model"]]["timeout"])
     bind(directory / "identity.json", {"payload": payload, "api_base": settings["api_base"],
@@ -129,10 +128,7 @@ def summarize(task, candidates, settings, directory, key):
             except (ValueError, KeyError, IndexError, TypeError, AttributeError):
                 transport_failure()
                 continue
-            valid = bool(answer.strip())
-            if kimi and choice.get("finish_reason") == "length":
-                valid = False
-            if valid:
+            if answer.strip():
                 if trajectory_path is not None:
                     publish_trajectory(response)
                 (directory / "summary.txt").write_text(answer)

@@ -88,6 +88,7 @@ def test_frozen_location_identity_and_complete_coverage(tmp_path, task, candidat
     ("qwen3.7-plus", "qwen3.7-plus", 1.0, 0.95, 1000000, 131072, False),
     ("qwen3.7-plus-thinking", "qwen3.7-plus", 1.0, 0.95, 1000000, 131072, True),
     ("qwen-3.8-max", "qwen-3.8-max", 1.0, 0.95, 1000000, 131072, False),
+    ("kimi-k2.7-code", "kimi-k2.7-code", 0.0, 1.0, 131072, 32768, True),
 ])
 @pytest.mark.parametrize("candidate_count", [1, 2])
 def test_complete_localization_to_final_patch(monkeypatch, tmp_path, task, candidate, settings, model, candidate_count,
@@ -110,7 +111,8 @@ def test_complete_localization_to_final_patch(monkeypatch, tmp_path, task, candi
             assert "max_tokens" not in payload
         else:
             assert payload["max_tokens"] == output
-        if model in {"glm-5.2", "qwen3.7-plus", "qwen3.7-plus-thinking", "qwen-3.8-max"}:
+        assert "preserve_thinking" not in payload
+        if model in {"glm-5.2", "qwen3.7-plus", "qwen3.7-plus-thinking", "qwen-3.8-max", "kimi-k2.7-code"}:
             assert payload["enable_thinking"] is thinking
         elif model == "glm-4.7":
             assert payload["thinking"] == {"type": "enabled"}
@@ -156,7 +158,8 @@ def test_complete_localization_to_final_patch(monkeypatch, tmp_path, task, candi
             class Response:
                 ok = True
                 def json(self):
-                    return dict(choices=[dict(message=dict(content="Implement the required constant and verify callers."))])
+                    return dict(choices=[dict(finish_reason="length", message=dict(
+                        content="Implement the required constant and verify callers."))])
             return Response()
         def close(self):
             pass

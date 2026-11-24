@@ -107,9 +107,6 @@ def _capture_checkout(request, env, attempt, *, official=False, timeout=60):
         target = "/root/phoenix_captured.patch"
         if official:
             command = staged_diff_command(repo, target)
-        elif request["settings"]["model"] == "kimi-k2.7-code":
-            command = ("cd " + shlex.quote(repo) + " && git add -N . && "
-                       "git diff --binary --no-ext-diff HEAD > " + target)
         else:
             command = ("cd " + shlex.quote(repo) + " && git add -A && "
                        "git diff --binary --no-ext-diff HEAD > " + target)
@@ -118,7 +115,7 @@ def _capture_checkout(request, env, attempt, *, official=False, timeout=60):
         (attempt / "captured.patch").write_bytes(patch)
         audit.update(status="captured", patch_sha256=digest(attempt / "captured.patch"),
                      patch_bytes=len(patch), snapshot_commit=head, image_id=record["Image"])
-        if not official and request["settings"]["model"] != "kimi-k2.7-code":
+        if not official:
             audit["patched_tree"] = execute("git", "-C", repo, "write-tree").decode().strip()
         return audit
     except Exception as exc:
