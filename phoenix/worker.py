@@ -17,7 +17,7 @@ import yaml
 
 from phoenix.repair_guidance import IMPLEMENTATION_GUIDANCE
 from phoenix.prompts import PromptBuilder
-from phoenix.settings import ROOT, model_config, write_json
+from phoenix.settings import REPAIR_METHODS, ROOT, model_config, write_json
 from phoenix.run_state import read, digest, process_identity, lock
 from phoenix.resources import io_slot
 
@@ -52,7 +52,7 @@ def build_config(request):
     data.update(type="default", max_steps=settings["max_steps"], action_repeat_limit=0,
                 limit_submission_mode="official_v2_staged_diff", localization_workflow=False,
                 localization_independent_hypotheses=False, localization_complete_strategies=False)
-    shared_budget_mode = settings["method"] == "our_method"
+    shared_budget_mode = settings["method"] in REPAIR_METHODS
     data["model"] = model_config(settings["model"], settings["api_base"], shared_budget_mode=shared_budget_mode, context_settings=settings)
     data["tools"].update(git_execution_timeout=180, max_consecutive_execution_timeouts=0)
     if settings.get("no_truncation"):
@@ -228,7 +228,7 @@ def replay_patch(env, request, stage):
     env.write_file("/root/phoenix_preserved.patch", patch.read_text())
     args = dict(operation="replay_submission", root="/" + env.repo.repo_name,
                 patch_path="/root/phoenix_preserved.patch",
-                clean_tests=request["settings"]["method"] == "our_method" and recovery["mode"] == "submission",
+                clean_tests=request["settings"]["method"] in REPAIR_METHODS and recovery["mode"] == "submission",
                 expected_tree=recovery.get("patched_tree"))
     output = env.communicate(RUNTIME_PYTHON + " /root/phoenix_submission_probe.py " +
                              shlex.quote(json.dumps(args)), check="ignore", timeout=180)
@@ -377,7 +377,7 @@ def execute(request):
             return original_start()
     runner.env.start = gated_start
     hook = None
-    if request["settings"]["method"] == "our_method":
+    if request["settings"]["method"] in REPAIR_METHODS:
         hook = install_generation_budget(runner.agent, request["generation_allowance"], request["final_stage"],
                                  stage, request.get("prior_calls", 0),
                                  exclude_rate_limits=request["settings"].get("exclude_rate_limit_from_budget", False))
@@ -391,7 +391,7 @@ def execute(request):
             replay = replay_patch(runner.env, request, stage)
             patch = (stage / "replayed.patch").read_text()
             (stage / "submitted.patch").write_text(patch)
-            if request["settings"]["method"] == "our_method":
+            if request["settings"]["method"] in REPAIR_METHODS:
                 (stage / "PhoenixRepair.patch").write_text(patch)
                 write_json(stage / "submission.json", {"model_calls": request.get("prior_calls", 0),
                     "mechanical_validation": replay["mechanical_validation"], "review_calls": 0, "repair_calls": 0})
@@ -444,7 +444,7 @@ def run_owned(request):
         from phoenix.capture import capture_checkout
         try:
             capture_checkout(request, os.environ.copy(), stage,
-                official=request["settings"]["method"] != "our_method"
+                official=request["settings"]["method"] not in REPAIR_METHODS
                          and request["settings"]["model"] != "kimi-k2.7-code",
                 timeout=request.get("capture_reserve", 60))
         finally:

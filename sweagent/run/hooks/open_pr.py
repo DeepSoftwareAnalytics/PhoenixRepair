@@ -36,9 +36,9 @@ def open_pr(*, logger, token, env: SWEEnv, github_url, trajectory, _dry_run: boo
     except InvalidGithubURL as e:
         msg = "Data path must be a github issue URL if open_pr is set to True."
         raise ValueError(msg) from e
-    branch_name = f"swe-agent-fix-#{issue.number}-" + str(random.random())[2:10]
+    branch_name = f"phoenixrepair-fix-#{issue.number}-" + str(random.random())[2:10]
     env.communicate(
-        input="git config user.email 'noemail@swe-agent.com' && git config user.name 'SWE-agent'",
+        input="git config user.email 'phoenixrepair@users.noreply.github.com' && git config user.name 'PhoenixRepair'",
         error_msg="Failed to set git user",
         timeout=10,
         check="raise",
@@ -92,7 +92,7 @@ def open_pr(*, logger, token, env: SWEEnv, github_url, trajectory, _dry_run: boo
     )
     logger.debug(f"Pushed commit to {remote=} {branch_name=}: {out}")
     body = (
-        f"This is a PR opened by AI tool [SWE Agent](https://github.com/SWE-agent/SWE-agent/) "
+        f"This is a PR opened by AI tool [PhoenixRepair](https://github.com/DeepSoftwareAnalytics/PhoenixRepair) "
         f"to close [#{issue.number}]({issue_url}) ({issue.title}).\n\nCloses #{issue.number}."
     )
     body += "\n\n" + format_trajectory_markdown(trajectory, char_limit=60_000)
@@ -102,7 +102,7 @@ def open_pr(*, logger, token, env: SWEEnv, github_url, trajectory, _dry_run: boo
         args = dict(
             owner=owner,
             repo=repo,
-            title=f"SWE-agent[bot] PR to fix: {issue.title}",
+            title=f"PhoenixRepair[bot] PR to fix: {issue.title}",
             head=head,
             base=default_branch,
             body=body,
@@ -198,7 +198,7 @@ def format_trajectory_markdown(trajectory: list[dict[str, str]], char_limit: int
     """
     prefix = [
         "<details>",
-        "<summary>Thought process ('trajectory') of SWE-agent (click to expand)</summary>",
+        "<summary>Thought process ('trajectory') of PhoenixRepair (click to expand)</summary>",
         "",
         "",
     ]

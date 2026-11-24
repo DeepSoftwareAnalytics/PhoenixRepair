@@ -9,7 +9,7 @@ import requests
 
 from phoenix.prompts import PromptBuilder
 from phoenix.repair_guidance import SUMMARY_GUIDANCE
-from phoenix.settings import PROFILES, write_json
+from phoenix.settings import LEGACY_METHOD, REPAIR_METHODS, PROFILES, write_json
 from phoenix.run_state import bind, read, digest
 
 def sha(path):
@@ -46,7 +46,7 @@ def patch_for_prompt(path, limit=180_000):
 
 def summarize(task, candidates, settings, directory, key, *, shared_budget=False):
     directory.mkdir(parents=True, exist_ok=True)
-    shared_budget_mode = settings["method"] == "our_method"
+    shared_budget_mode = settings["method"] in REPAIR_METHODS
     if shared_budget_mode and not shared_budget:
         raise ValueError("PhoenixRepair summary must use the shared one-call budget")
     inputs = []
@@ -62,6 +62,8 @@ def summarize(task, candidates, settings, directory, key, *, shared_budget=False
         inputs.append(dict(index=index, trajectory=[None] * row["steps"], submission=preview,
                            exit_status="submitted" if shared_budget_mode else row["exit_status"], patch_sha256=sha(patch), preview=metadata))
     prompt = PromptBuilder()._build_comparison_prompt(task["problem_statement"], inputs, len(inputs))
+    if settings["method"] == LEGACY_METHOD:
+        prompt = prompt.removeprefix("You are PhoenixRepair.\n")
     if shared_budget_mode:
         prompt += SUMMARY_GUIDANCE
     (directory / "prompt.txt").write_text(prompt)

@@ -100,7 +100,7 @@ Compare all samples and provide:
 
 Keep response under 600 words. Focus on concrete technical differences and actionable insights.
 """
-        return prompt
+        return "You are PhoenixRepair.\n" + prompt
 
     def _generate_location_insights_from_patch(self, patch_data: dict, previous_round_info: dict = None) -> str:
         """从 patch data 生成 location insights，包含前一轮的反思"""

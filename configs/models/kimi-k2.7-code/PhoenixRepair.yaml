@@ -1,6 +1,5 @@
 # Kimi PhoenixRepair is a new experiment; no historical PhoenixRepair score is claimed.
 # The pre-review PhoenixRepair row: complete localization -> guided author generation.
-# No patch review, repair, P1 selection, or benchmark evaluation is run.
 model: kimi-k2.7-code
 instances: null
 runtime: null

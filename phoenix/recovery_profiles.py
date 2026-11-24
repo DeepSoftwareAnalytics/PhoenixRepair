@@ -1,5 +1,7 @@
 """Explicit historical model/method recovery profiles; never switch models."""
 
+from phoenix.settings import REPAIR_METHODS
+
 # Generation sampling parameters remain in settings.PROFILES. These values
 # describe transport/lifecycle recovery, not another repair or review prompt.
 MODEL_RECOVERY = {
@@ -30,10 +32,10 @@ def recovery_profile(settings):
     model = settings["model"]
     result = dict(MODEL_RECOVERY[model], model=model, method=settings["method"],
                   same_model_only=True, budget_reset=False, review_calls=0,
-                  environment_start_retries=3 if settings["method"] == "our_method" else 1,
+                  environment_start_retries=3 if settings["method"] in REPAIR_METHODS else 1,
                   terminal_session_retries=1, submission_replay_attempts=2)
     result["wall_time_seconds"] = settings.get("task_timeout", result["wall_time_seconds"])
-    if settings["method"] == "our_method":
+    if settings["method"] in REPAIR_METHODS:
         if not result["generation_supported"]:
             raise ValueError("No historically scored Kimi PhoenixRepair profile is available")
         result.update(summary_timeout_seconds=(30, result["api_timeout_seconds"]),

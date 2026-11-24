@@ -11,12 +11,12 @@ import subprocess
 import sys
 import signal
 
-from phoenix.settings import ROOT, PROFILES, fingerprint, load_instances, load_settings, write_json
+from phoenix.settings import LEGACY_METHOD, METHOD_NAME, REPAIR_METHODS, ROOT, PROFILES, fingerprint, load_instances, load_settings, write_json
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.set_defaults(method="our_method")
+    parser = argparse.ArgumentParser(prog=METHOD_NAME, description=__doc__)
+    parser.set_defaults(method=METHOD_NAME)
     parser.add_argument("--config", type=Path)
     parser.add_argument("--model", choices=tuple(PROFILES))
     parser.add_argument("--instances", type=Path, help="JSON array or JSONL task manifest")
@@ -44,7 +44,7 @@ def main(argv=None):
                         help="Validate configuration and task inputs; no model or Docker calls")
     args = parser.parse_args(argv)
     try:
-        settings = load_settings(args.method, args.config or ROOT / "configs/models" / (args.model or "glm-5.2") / "our_method.yaml", {
+        settings = load_settings(args.method, args.config or ROOT / "configs/models" / (args.model or "glm-5.2") / "PhoenixRepair.yaml", {
             k: getattr(args, k) for k in ("model", "instances", "output", "runtime", "api_base", "concurrency",
                                          "max_steps", "task_timeout", "localization_max_steps", "localization_timeout",
                                          "docker_host", "locations", "stage", "adaptive_io", "io_device",
@@ -55,9 +55,9 @@ def main(argv=None):
         if args.limit < 0:
             raise ValueError("limit cannot be negative")
         instances = load_instances(Path(settings["instances"]), args.instance_id, args.limit)
-        if args.method == "our_method" and settings["max_steps"] <= 40:
+        if args.method in REPAIR_METHODS and settings["max_steps"] <= 40:
             raise ValueError("This experiment requires max_steps > 40")
-        if args.method == "our_method" and settings["stage"] == "patch" and not settings.get("locations"):
+        if args.method in REPAIR_METHODS and settings["stage"] == "patch" and not settings.get("locations"):
             raise ValueError("--stage patch requires --locations")
         if settings["stage"] == "localization" and settings.get("locations"):
             raise ValueError("--locations is for patch generation; omit it when generating new locations")
@@ -68,7 +68,7 @@ def main(argv=None):
         plan = dict(recovery_format=1, settings=settings, tasks=len(instances), instance_ids=[x["instance_id"] for x in instances],
                     task_manifest_sha256=fingerprint(instances), model_profile=PROFILES[settings["model"]],
                     review_calls_enabled=False, repair_stage_enabled=False,
-                    method_output="PhoenixRepair" if args.method == "our_method" else "final.patch",
+                    method_output="PhoenixRepair" if args.method in REPAIR_METHODS else "final.patch",
                     old_patch_seed=False, evaluation_feedback_input=False)
         if args.dry_run:
             print(json.dumps(plan, ensure_ascii=False, indent=2))
@@ -97,6 +97,8 @@ def main(argv=None):
                 previous = json.loads((output / "plan.json").read_text())
                 if previous.get("recovery_format") != 1:
                     raise ValueError("This run predates durable recovery; use a new output directory")
+                if previous["settings"].get("method") == LEGACY_METHOD:
+                    settings["method"] = LEGACY_METHOD
                 immutable = ("model", "method", "api_base", "max_steps", "task_timeout", "samples",
                              "localization_max_steps", "localization_timeout", "locations", "stage",
                              "runtime", "docker_host", "container_cpus", "container_memory", "pin_cpus",

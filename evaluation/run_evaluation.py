@@ -96,7 +96,7 @@ class BenchmarkEvaluation:
         with open(patch_path, 'r') as f:
             dict1 = json.load(f)
         for k, v in dict1.items():
-            preds.append({"instance_id": k, "model_name_or_path": "swe-agent", "model_patch": v['model_patch']})
+            preds.append({"instance_id": k, "model_name_or_path": "PhoenixRepair", "model_patch": v['model_patch']})
         print(f"Collected {len(preds)} predictions")
         with open(os.path.join(self.results_dir, "final_answer1.json"), "w") as f:
             json.dump(preds, f)

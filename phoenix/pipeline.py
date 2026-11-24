@@ -8,7 +8,7 @@ from pathlib import Path
 import threading
 import time
 
-from phoenix.settings import localization_config, write_json
+from phoenix.settings import REPAIR_METHODS, localization_config, write_json
 from phoenix.summary import summarize
 from phoenix.run_state import bind, digest
 from phoenix.backend import DockerBackend, ControllerInterrupted
@@ -77,13 +77,13 @@ def run_task(task, settings, backend, key, candidates=None, summary_fn=summarize
         for job in jobs:
             stage = directory / job["stage"]
             if job["kind"] == "summary":
-                summary = summary_fn(task, results, settings, stage, key, shared_budget=method == "our_method")
-                if method == "our_method":
+                summary = summary_fn(task, results, settings, stage, key, shared_budget=method in REPAIR_METHODS)
+                if method in REPAIR_METHODS:
                     used += 1
                 continue
             candidate = candidates[len(results)] if job["kind"] == "candidate" else None
             allowance = job["allowance"]
-            if method == "our_method" and job["kind"] == "final":
+            if method in REPAIR_METHODS and job["kind"] == "final":
                 allowance = settings["max_steps"] - used
                 if allowance < 1:
                     raise RuntimeError("No generation budget remains for final PhoenixRepair")
@@ -100,11 +100,11 @@ def run_task(task, settings, backend, key, candidates=None, summary_fn=summarize
         final = results[-1]
         patch = Path(final["patch"]).read_bytes()
         (directory / "final.patch").write_bytes(patch)
-        if method == "our_method":
+        if method in REPAIR_METHODS:
             (directory / "PhoenixRepair.patch").write_bytes(patch)
         report = dict(status="completed", model=settings["model"], instance_id=task["instance_id"],
             method=method, patch=str(directory / "final.patch"), model_calls=used,
-            review_calls=0, repair_calls=0, output_stage="PhoenixRepair" if method == "our_method" else "final",
+            review_calls=0, repair_calls=0, output_stage="PhoenixRepair" if method in REPAIR_METHODS else "final",
             benchmark_evaluated=False, stages=results)
     except ControllerInterrupted as exc:
         report = dict(status="interrupted", model=settings["model"], instance_id=task["instance_id"],
@@ -171,7 +171,7 @@ def run(instances, settings, key):
         os.environ["DOCKER_HOST"] = settings["docker_host"]
     ready = instances
     failures = []
-    if settings["method"] == "our_method" and settings["stage"] != "patch" and not locations:
+    if settings["method"] in REPAIR_METHODS and settings["stage"] != "patch" and not locations:
         from phoenix import localization
         locations = str(output / "localization")
         write_json(Path(locations) / "instances.json", instances)
@@ -195,14 +195,14 @@ def run(instances, settings, key):
         ready = [x for x in instances if x["instance_id"] in succeeded]
         if settings["stage"] == "localization":
             return localized
-    if settings["method"] == "our_method" and not locations:
+    if settings["method"] in REPAIR_METHODS and not locations:
         raise ValueError("Patch-only mode requires --locations")
     backend = DockerBackend(settings, key) if ready else None
 
     def solve(task):
         try:
             candidates = None
-            if settings["method"] == "our_method":
+            if settings["method"] in REPAIR_METHODS:
                 artifact = load_location(locations, task, settings["model"])
                 write_json(output / settings["model"] / task["instance_id"] / "localization.json", artifact)
                 candidates = artifact["candidates"]

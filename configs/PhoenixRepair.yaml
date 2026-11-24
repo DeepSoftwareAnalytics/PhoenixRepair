@@ -1,9 +1,8 @@
 # Current GLM PhoenixRepair: complete localization -> 200 shared generation calls, 32K output.
-# No patch review, repair, P1 selection, or benchmark evaluation is run.
 model: glm-5.2
 instances: null
 runtime: null
-output: runs/our-method-repair
+output: runs/PhoenixRepair
 concurrency: 4
 max_steps: 200
 max_input_tokens: 131072
