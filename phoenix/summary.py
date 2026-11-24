@@ -79,9 +79,18 @@ def summarize(task, candidates, settings, directory, key, *, shared_budget=False
         "usage": dict(prompt_tokens=0, completion_tokens=0, total_tokens=0),
         "usage_applied": [], "unknown_requests": []}
     receipt = read(directory / "result.json")
+    trajectory_path = directory.parent / "comparison.traj" if directory.name == "comparison" else None
+
+    def publish_trajectory(response):
+        message = {"role": "assistant", **response["choices"][0]["message"]}
+        write_json(trajectory_path, {"model": payload["model"], "history": [*payload["messages"], message],
+                                     "usage": response.get("usage", {})})
+
     if receipt.get("status") == "completed":
         if digest(directory / "summary.txt") != receipt["summary_sha256"]:
             raise ValueError("Completed summary changed; refusing to regenerate or continue")
+        if trajectory_path is not None and not trajectory_path.exists():
+            publish_trajectory(read(directory / f"response-{receipt['api_attempts']}.json"))
         return (directory / "summary.txt").read_text()
     if state["phase"] == "failed":
         raise RuntimeError("Summary exhausted its original bounded attempts; no budget reset on resume")
@@ -178,6 +187,8 @@ def summarize(task, candidates, settings, directory, key, *, shared_budget=False
             if kimi and choice.get("finish_reason") == "length":
                 valid = False
             if valid:
+                if trajectory_path is not None:
+                    publish_trajectory(response)
                 (directory / "summary.txt").write_text(answer)
                 write_json(directory / "result.json", {"status": "completed",
                     "summary_sha256": digest(directory / "summary.txt"), "model": settings["model"],

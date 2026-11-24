@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import sys
@@ -28,6 +29,19 @@ def log_tail(path, limit=200_000):
     with path.open("rb") as stream:
         stream.seek(max(0, path.stat().st_size - limit))
         return stream.read().decode(errors="replace")
+
+
+def publish_author_trajectory(stage, attempt, observed, rc):
+    # Submission replay can finish without a model call. Keep the last actual author trace.
+    source = observed["trajectory"]
+    completed = attempt / "generate/author/author.traj"
+    if rc == 0 and completed.is_file():
+        source = completed
+    if source is None:
+        return
+    temporary = stage / ".author.traj.tmp"
+    shutil.copyfile(source, temporary)
+    temporary.replace(stage / "author.traj")
 
 
 class DockerBackend:
@@ -304,6 +318,8 @@ class DockerBackend:
                 # On controller interruption _monitor raises before cleanup:
                 # the exact live worker is adopted by the next --resume.
                 observed = self._read_attempt(request, attempt, rc, timed_out)
+                if self.settings["method"] in REPAIR_METHODS:
+                    publish_author_trajectory(stage, attempt, observed, rc)
                 if observed["exit_status"] == "exit_api" and observed["patch"] is None:
                     # Keep the original checkout if neither capture succeeded.
                     # A failed snapshot must not destroy the only copy of work.
