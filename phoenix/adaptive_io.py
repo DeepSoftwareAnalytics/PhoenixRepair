@@ -45,26 +45,10 @@ class AdmissionPolicy:
         self.low_since = None
         self.high_since = None
         self.last_change = None
-        self.last_failure = None
         self.last = None
         self.reason = 'initial_limit'
-        self.last_request_id = None
 
-    def apply_request(self, request, wall_time):
-        if not request or request.get('id') == self.last_request_id or request.get('expires_at', 0) < wall_time:
-            return False
-        target = request.get('total')
-        if type(target) is not int or not self.minimum <= target <= self.maximum:
-            return False
-        self.limit = target
-        self.last_request_id = request['id']
-        self.last_change = None
-        self.reason = 'user_capacity_probe'
-        return True
-
-    def update(self, metrics, now, active, infrastructure_failure=False):
-        if infrastructure_failure:
-            self.last_failure = now
+    def update(self, metrics, now, active):
         if metrics is None:
             return self.settings()
         self.last = metrics
@@ -91,7 +75,6 @@ class AdmissionPolicy:
             self.low_since = None
         elif (low and self.low_since is not None and now - self.low_since >= 600
               and (self.last_change is None or now - self.last_change >= 600)
-              and (self.last_failure is None or now - self.last_failure >= 600)
               and active >= self.limit - 1 and self.limit < self.maximum):
             self.limit = min(self.maximum, self.limit + 2)
             self.last_change = now
@@ -105,6 +88,6 @@ class AdmissionPolicy:
                 'environment_start_concurrency': 1 if high else 2,
                 'local_command_concurrency': 2 if high else 4,
                 'pause_new_image_imports': high, 'reason': self.reason,
-                'last_request_id': self.last_request_id,
+                'last_request_id': None,
                 'sample': self.last, 'evaluation_enabled': False,
                 'running_workers_are_preserved': True, 'updated_at': time.time()}

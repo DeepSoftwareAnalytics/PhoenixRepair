@@ -52,32 +52,6 @@ limiting the maximum amount of memory per worker.
 
 In our case, this completely avoided any instances of running OOM.
 
-However, OOM situations can potentially lock you out of the server, so
-you might want to use a script like the following as a second layer
-defense to kill any process that hogs too much memory (note that this will affect _any_ script and not just swe-agent):
-
-<details>
-<summary>Memory sentinel</summary>
-
-```python
---8<-- "docs/usage/memory_sentinel.py"
-```
-
-</details>
-
-If swe-agent dies or you frequently abort it, you might have leftover docker containers
-(they are cleaned up by normal termination of swe-agent but can be left over if it is killed).
-You can use a sentinel script like the following to clean them up periodically
-(note that this will affect _any_ long running container and not just those from swe-agent):
-
-<details>
-<summary>Container sentinel</summary>
-
-```bash
---8<-- "docs/usage/containers_sentinel.sh"
-```
-</details>
-
 ## Tradeoffs between resolution rate and cost
 
 * Running multi-attempt configurations will always be _very_ expensive. Don't use them if cost is of importance.
